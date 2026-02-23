@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.text.paragraph import Paragraph
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,30 @@ def load_minutes_json(path: Path) -> MinutesJSON:
     return MinutesJSON(date_of_meeting=date, sections=sections_map)
 
 
-def _replace_placeholder_in_paragraph(paragraph, placeholder: str, replacement: str) -> bool:
-    """Replace placeholder in a paragraph, even when Word has split it across runs.
+def _insert_paragraph_after(paragraph: Paragraph, text: str = "", style: str | None = None) -> Paragraph:
+    """Insert a new paragraph after the given paragraph."""
+
+    new_p = OxmlElement("w:p")
+    paragraph._p.addnext(new_p)
+    new_para = Paragraph(new_p, paragraph._parent)
+    if style:
+        new_para.style = style
+    if text:
+        new_para.add_run(text)
+    return new_para
+
+
+def _clear_paragraph(paragraph: Paragraph) -> None:
+    for r in paragraph.runs[::-1]:
+        r._element.getparent().remove(r._element)
+
+
+def _replace_placeholder_in_paragraph(paragraph: Paragraph, placeholder: str, replacement: str) -> bool:
+    """Replace placeholder in a paragraph.
+
+    Supports a special case where the paragraph is *just* the placeholder, in
+    which case we can expand markdown-ish bullets ("- ") into true Word bullet
+    paragraphs.
 
     Returns True if a replacement was applied.
     """
@@ -38,20 +62,56 @@ def _replace_placeholder_in_paragraph(paragraph, placeholder: str, replacement: 
     if placeholder not in paragraph.text:
         return False
 
-    # Collapse runs to a single string, do replace, then rebuild paragraph.
+    # Special case: paragraph contains only placeholder (common for templates).
+    if paragraph.text.strip() == placeholder:
+        lines = replacement.splitlines()
+        # If it's bullet-like markdown, convert to real Word bullet paragraphs.
+        if any(ln.strip().startswith("- ") for ln in lines):
+            # We'll reuse the existing paragraph as the first output paragraph.
+            cur = paragraph
+            first = True
+
+            for ln in lines:
+                stripped = ln.rstrip()
+                if not stripped:
+                    # Blank line → empty normal paragraph
+                    cur = paragraph if first else _insert_paragraph_after(cur, "")
+                    cur.style = "Normal"
+                    _clear_paragraph(cur)
+                    first = False
+                    continue
+
+                is_bullet = stripped.lstrip().startswith("- ")
+                text = stripped.lstrip()[2:] if is_bullet else stripped
+                style = "List Bullet" if is_bullet else "Normal"
+
+                if first:
+                    _clear_paragraph(cur)
+                    cur.style = style
+                    cur.add_run(text)
+                    first = False
+                else:
+                    cur = _insert_paragraph_after(cur, text=text, style=style)
+
+            return True
+
+        # Non-bullet multi-line content: keep as literal line breaks.
+        _clear_paragraph(paragraph)
+        lines2 = replacement.splitlines() or [""]
+        run = paragraph.add_run(lines2[0])
+        for ln in lines2[1:]:
+            run.add_break()
+            paragraph.add_run(ln)
+        return True
+
+    # Fallback: paragraph has other text; do a literal replacement.
     new_text = paragraph.text.replace(placeholder, replacement)
-
-    # Clear existing runs
-    for r in paragraph.runs[::-1]:
-        r._element.getparent().remove(r._element)
-
-    # Rebuild with line breaks
+    _clear_paragraph(paragraph)
     lines = new_text.splitlines() or [""]
     run = paragraph.add_run(lines[0])
     for ln in lines[1:]:
         run.add_break()
         paragraph.add_run(ln)
-
     return True
 
 
