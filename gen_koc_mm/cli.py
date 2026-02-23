@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+import json
+from datetime import datetime
+import re
+
+import typer
+from dotenv import load_dotenv
+from rich.console import Console
+
+from .chunking import chunk_utterances, identify_section_boundaries, section_is_absent
+from .llm import generate_minutes
+from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_marked_transcript
+from .prompting import minutes_system_prompt, minutes_user_prompt, validate_fewshot_config
+from .sections import SECTION_DEFS, SECTION_HEADINGS
+from .transcript import parse_transcript
+
+app = typer.Typer(add_completion=False, help="Generate KoC meeting minutes from a transcript")
+console = Console()
+
+
+@app.callback()
+def _main():
+    """KoC minutes generator."""
+    # Having a callback forces Typer to keep subcommands (so `generate` is a subcommand).
+    return
+
+
+def _safe_slug(s: str) -> str:
+    s = s.lower().strip()
+    s = s.replace("’", "'")
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "section"
+
+
+def _render_minutes(*, section_to_bullets: dict[str, str]) -> str:
+    # Format: empty line before each section heading, section heading in bold on its own line.
+    out_lines: list[str] = []
+    for heading in SECTION_HEADINGS:
+        out_lines.append("")
+        out_lines.append(f"**{heading}**")
+        bullets = (section_to_bullets.get(heading) or "").strip()
+        if bullets:
+            out_lines.extend(bullets.splitlines())
+    # Ensure trailing newline
+    return "\n".join(out_lines).lstrip() + "\n"
+
+
+@app.command()
+def generate(
+    input: Path = typer.Option(..., "--input", exists=True, dir_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+    identify_sections: bool = typer.Option(
+        False,
+        "--identify-sections",
+        help="Part 1: write an intermediate transcript with explicit ** <section key> ** markers inserted at detected boundaries.",
+    ),
+    generate_output: bool = typer.Option(
+        False,
+        "--generate-output",
+        help="Part 2: generate minutes using an intermediate transcript that already contains ** <section key> ** markers.",
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="OpenAI model name"),
+    debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
+):
+    """Generate KoC meeting minutes.
+
+    This command has two modes:
+
+    - `--identify-sections`: boundary detection only (safe-regex cues), writes a marked transcript for review.
+    - `--generate-output`: minutes generation from a marked transcript (explicit section boundaries).
+    """
+
+    load_dotenv(override=False)
+
+    if identify_sections == generate_output:
+        raise typer.BadParameter("Please specify exactly one of --identify-sections or --generate-output")
+
+    raw = input.read_text(encoding="utf-8")
+
+    # Part 1: Identify boundaries and write intermediate marked transcript.
+    if identify_sections:
+        utterances = parse_transcript(raw)
+        utterances2, detected = identify_section_boundaries(utterances)
+
+        heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
+        boundaries: list[MarkedBoundary] = [
+            MarkedBoundary(idx=b.idx, key=heading_to_key[b.heading]) for b in detected if b.heading in heading_to_key
+        ]
+
+        marked = render_marked_transcript(utterances=utterances2, boundaries=boundaries)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(marked, encoding="utf-8")
+        console.print(f"Wrote intermediate marked transcript: [bold]{output}[/bold]")
+        return
+
+    # Part 2: Generate minutes from an already-marked transcript.
+    # Sanity-check few-shot examples before we start making LLM calls.
+    try:
+        cfg = validate_fewshot_config()
+    except Exception as e:
+        raise typer.BadParameter(f"Few-shot examples sanity-check failed: {e}")
+
+    # One-liner summary
+    n_total = len(cfg.examples)
+    n_global = len([ex for ex in cfg.examples if ex.section_key == "*"])
+    n_specific = n_total - n_global
+    console.print(f"Few-shot examples: {n_total} loaded ({n_global} global, {n_specific} section-specific)")
+
+    chunks = parse_marked_transcript(raw)
+
+    sys_p = minutes_system_prompt()
+    model_name = model or "gpt-4o-mini"
+
+    section_to_bullets: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
+
+    # Optional: write chunks for inspection
+    if debug_chunks:
+        chunk_dir = output.parent / (output.stem + "_chunks")
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        for ch in chunks:
+            safe = (
+                ch.heading.lower()
+                .replace("’", "'")
+                .replace(" ", "_")
+                .replace(":", "")
+            )
+            (chunk_dir / f"{safe}.txt").write_text(ch.text, encoding="utf-8")
+
+    # Logs folder for prompt/response traces
+    logs_dir = output.parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    for idx, ch in enumerate(chunks, start=1):
+        # If section is empty, or the transcript explicitly says the person isn't present, leave it empty.
+        if section_is_absent(ch):
+            section_to_bullets[ch.heading] = ""
+            continue
+
+        user_p = minutes_user_prompt(section_heading=ch.heading, section_transcript=ch.text)
+
+        slug = _safe_slug(ch.heading)
+        base = f"{run_id}_{idx:02d}_{slug}"
+
+        # Log prompts before LLM call (helps debug crashes/timeouts).
+        (logs_dir / f"{base}.system.txt").write_text(sys_p + "\n", encoding="utf-8")
+        (logs_dir / f"{base}.user.txt").write_text(user_p + "\n", encoding="utf-8")
+
+        bullets_raw = generate_minutes(system_prompt=sys_p, user_prompt=user_p, model=model_name)
+
+        # Log raw response.
+        (logs_dir / f"{base}.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
+
+        bullets = "\n".join([ln for ln in bullets_raw.splitlines() if ln.strip().startswith("-")]).strip()
+        section_to_bullets[ch.heading] = bullets
+
+    minutes = _render_minutes(section_to_bullets=section_to_bullets)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(minutes, encoding="utf-8")
+
+    console.print(f"Wrote: [bold]{output}[/bold]")
+
+
+@app.command(name="suggest-cues")
+def suggest_cues(
+    input_path: Optional[Path] = typer.Option(
+        None, "--input-path", exists=True, help="A transcript file or a folder containing transcript files"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", help="Write markdown report to this file (defaults to stdout)"
+    ),
+    glob: str = typer.Option("*.txt", "--glob", help="When --input-path is a folder, which files to include"),
+    max_per_pattern: int = typer.Option(20, "--max-per-pattern", help="Max lines per (section, pattern, file)"),
+    discover_json: Optional[Path] = typer.Option(
+        None,
+        "--discover-json",
+        help="Write discovery candidates as JSON to this file (no markdown).",
+    ),
+    max_candidates_per_file: int = typer.Option(500, "--max-candidates-per-file", help="Discovery JSON: limit candidates per file"),
+    update_cues: Optional[Path] = typer.Option(
+        None,
+        "--update-cues",
+        help="Path to a discovery JSON file. Updates gen_koc_mm/section_cues.json by appending suggested safe_regex patterns.",
+    ),
+    min_confidence: float = typer.Option(0.7, "--min-confidence", help="--update-cues: minimum suggested_confidence to apply"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="--update-cues: compute changes but don't write section_cues.json"),
+):
+    """Scan transcript files for section-cue lines, or discover new cues, or update cues from discovery JSON."""
+
+    from .cue_suggest import build_discover_json, update_section_cues_json
+
+    # Mode 1: Update cues from a discovery JSON file
+    if update_cues is not None:
+        summary = update_section_cues_json(
+            discover_json_path=update_cues,
+            min_confidence=min_confidence,
+            dry_run=dry_run,
+        )
+        console.print_json(data=summary)
+        return
+
+    if input_path is None:
+        raise typer.BadParameter("--input-path is required unless you use --update-cues")
+
+    # Mode 2: Discover candidates and output JSON
+    if discover_json is not None:
+        payload = build_discover_json(
+            input_path=input_path,
+            glob=glob,
+            max_candidates_per_file=max_candidates_per_file,
+        )
+        discover_json.parent.mkdir(parents=True, exist_ok=True)
+        discover_json.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        console.print(f"Wrote: [bold]{discover_json}[/bold]")
+        return
+
+    # Mode 3: If you really want the old markdown report, we can re-add it.
+    raise typer.BadParameter(
+        "Please specify either --discover-json (to generate discovery JSON) or --update-cues (to apply a discovery JSON)."
+    )
+
+
+if __name__ == "__main__":
+    app()
