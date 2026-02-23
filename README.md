@@ -126,6 +126,9 @@ The JSON schema (v1.0) looks like:
 
 Merge a minutes JSON file into a Word template.
 
+A known-good, compatible template is included:
+- `templates/KoC-Meeting-Minutes-Template-compatible.docx`
+
 Your template should contain placeholders like:
 - `<<date_of_meeting>>`
 - `<<grand_knights_report>>`
