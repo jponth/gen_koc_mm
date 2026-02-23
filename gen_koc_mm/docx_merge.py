@@ -49,7 +49,13 @@ def _clear_paragraph(paragraph: Paragraph) -> None:
         r._element.getparent().remove(r._element)
 
 
-def _replace_placeholder_in_paragraph(paragraph: Paragraph, placeholder: str, replacement: str) -> bool:
+def _replace_placeholder_in_paragraph(
+    paragraph: Paragraph,
+    placeholder: str,
+    replacement: str,
+    *,
+    bullet_style: str | None = None,
+) -> bool:
     """Replace placeholder in a paragraph.
 
     Supports a special case where the paragraph is *just* the placeholder, in
@@ -83,7 +89,14 @@ def _replace_placeholder_in_paragraph(paragraph: Paragraph, placeholder: str, re
 
                 is_bullet = stripped.lstrip().startswith("- ")
                 text = stripped.lstrip()[2:] if is_bullet else stripped
-                style = "List Bullet" if is_bullet else "Normal"
+                if is_bullet and bullet_style:
+                    style = bullet_style
+                elif is_bullet:
+                    # Fallback: insert a literal bullet if the template has no bullet styles.
+                    style = "Normal"
+                    text = f"• {text}" if text else "•"
+                else:
+                    style = "Normal"
 
                 if first:
                     _clear_paragraph(cur)
@@ -128,23 +141,42 @@ def _iter_all_paragraphs(doc: Document):
                     yield p
 
 
+def _pick_bullet_style_name(doc: Document) -> str | None:
+    # Different templates can have different style sets.
+    # Try a few common bullet paragraph styles.
+    candidates = [
+        "List Bullet",
+        "ListBullet",
+        "Bullet List",
+        "Bulleted List",
+        "List Paragraph",
+        "ListParagraph",
+    ]
+    available = {s.name for s in doc.styles}
+    for c in candidates:
+        if c in available:
+            return c
+    return None
+
+
 def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path, output_docx_path: Path) -> dict[str, Any]:
     minutes = load_minutes_json(minutes_json_path)
 
     doc = Document(str(template_docx_path))
+    bullet_style = _pick_bullet_style_name(doc)
 
     replaced: list[str] = []
 
     # Special top-level placeholder (optional)
     date_placeholder = "<<date_of_meeting>>"
     for p in _iter_all_paragraphs(doc):
-        if _replace_placeholder_in_paragraph(p, date_placeholder, minutes.date_of_meeting):
+        if _replace_placeholder_in_paragraph(p, date_placeholder, minutes.date_of_meeting, bullet_style=bullet_style):
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
         ph = f"<<{key}>>"
         for p in _iter_all_paragraphs(doc):
-            if _replace_placeholder_in_paragraph(p, ph, txt):
+            if _replace_placeholder_in_paragraph(p, ph, txt, bullet_style=bullet_style):
                 replaced.append(ph)
 
     output_docx_path.parent.mkdir(parents=True, exist_ok=True)
