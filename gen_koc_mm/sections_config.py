@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,6 +54,13 @@ def load_sections_config() -> SectionsConfig:
     if not isinstance(secs, list):
         raise ValueError("'sections' must be a list")
 
+    def _norm_key(k: str) -> str:
+        # Canonical key format: snake_case (lowercase, underscores)
+        k = k.strip().lower().replace("’", "").replace("'", "")
+        k = re.sub(r"[^a-z0-9]+", "_", k)
+        k = re.sub(r"_+", "_", k).strip("_")
+        return k
+
     out: list[SectionDef] = []
     for s in secs:
         if not isinstance(s, dict):
@@ -61,7 +69,7 @@ def load_sections_config() -> SectionsConfig:
         heading = s.get("heading")
         if not isinstance(key, str) or not isinstance(heading, str):
             raise ValueError("each section must have string 'key' and 'heading'")
-        nk = key.strip().lower().replace("’", "").replace("'", "")
+        nk = _norm_key(key)
         out.append(SectionDef(key=nk, heading=heading))
 
     if not out:

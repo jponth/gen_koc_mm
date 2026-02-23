@@ -1,12 +1,12 @@
 # gen_koc_mm
 
-Generate Knights of Columbus (KoC) council meeting minutes (Markdown) from a **transcript text file**.
+Generate Knights of Columbus (KoC) council meeting minutes (JSON) from a **transcript text file**.
 
 ## What this does
 - Takes a transcript text file (timestamps are ok; they will be stripped).
 - Keeps speakers as `Speaker 1`, `Speaker 2`, ... (no real-person mapping).
 - Splits the transcript into the KoC section template using cue phrases and safe regexes.
-- Produces minutes **without timestamps** and **without a header block**.
+- Produces minutes as **JSON** (no timestamps, no header block).
 
 ## Output template
 The generator outputs these section headings (in order), as bold lines:
@@ -56,7 +56,8 @@ export OPENAI_MODEL=gpt-4o-mini
 
 This package exposes a Typer CLI:
 
-- `python -m gen_koc_mm generate` — main minutes generation workflow
+- `python -m gen_koc_mm generate` — main minutes generation workflow (outputs JSON in phase 2)
+- `python -m gen_koc_mm merge-docx` — merge minutes JSON into a Word (.docx) template using placeholders
 - `python -m gen_koc_mm suggest-cues` — discover/update section boundary cues
 
 ### `generate`
@@ -64,13 +65,14 @@ This package exposes a Typer CLI:
 This command has **two phases**. You must choose **exactly one** of:
 
 - `--identify-sections`: boundary detection only (writes an intermediate transcript with explicit section markers)
-- `--generate-output`: minutes generation from an already-marked transcript (the transcript already contains section markers)
+- `--generate-output`: minutes generation JSON from an already-marked transcript (the transcript already contains section markers)
 
 Options:
 - `--input PATH` (required) — input transcript file
-- `--output PATH` (required) — output file
+- `--output PATH` (required) — output file (marked transcript in phase 1; JSON in phase 2)
 - `--identify-sections` — phase 1 (creates a marked transcript)
-- `--generate-output` — phase 2 (creates minutes)
+- `--generate-output` — phase 2 (creates minutes JSON)
+- `--date-of-meeting TEXT` — set JSON field `date_of_meeting` (best-effort inferred from filename if omitted)
 - `--model TEXT` — override model name (otherwise uses `OPENAI_MODEL`, default `gpt-4o-mini`)
 - `--debug-chunks` — when generating output, write per-section transcript chunks next to the output for inspection
 
@@ -89,14 +91,55 @@ This writes a transcript where boundaries are explicitly marked as:
 
 (You can open and review/edit this before generating minutes.)
 
-#### Phase 2 example: generate minutes from a marked transcript
+#### Phase 2 example: generate minutes JSON from a marked transcript
 
 ```bash
 python -m gen_koc_mm generate \
   --generate-output \
   --input output/marked_transcript.txt \
-  --output output/minutes.md \
+  --output output/minutes.json \
+  --date-of-meeting 2026-02-23 \
   --debug-chunks
+```
+
+The JSON schema (v1.0) looks like:
+
+```json
+{
+  "schema_version": "1.0",
+  "date_of_meeting": "2026-02-23",
+  "generator": { "name": "gen_koc_mm", "version": "0.1.0", "model": "gpt-4o-mini" },
+  "source": { "input_file": "marked_transcript.txt" },
+  "sections": [
+    {
+      "section_key": "grand_knights_report",
+      "section_heading": "Grand Knights Report",
+      "section_text": "- ...",
+      "format": "markdown",
+      "status": "ok"
+    }
+  ]
+}
+```
+
+### `merge-docx`
+
+Merge a minutes JSON file into a Word template.
+
+Your template should contain placeholders like:
+- `<<date_of_meeting>>`
+- `<<grand_knights_report>>`
+- `<<chaplains_report>>`
+
+Section keys are canonical **snake_case** (underscores). Older space-separated keys are still accepted in marked transcripts (e.g. `** grand knights report **`), but the JSON output + Word placeholders use snake_case.
+
+Example:
+
+```bash
+python -m gen_koc_mm merge-docx \
+  --minutes-json output/minutes.json \
+  --template-docx templates/koc_minutes_template.docx \
+  --output-docx output/minutes_filled.docx
 ```
 
 ### `suggest-cues`

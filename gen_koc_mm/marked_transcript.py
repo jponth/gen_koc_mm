@@ -12,7 +12,13 @@ _MARKER_RE = re.compile(r"^\s*\*\*\s*(.+?)\s*\*\*\s*$")
 
 
 def _norm_key(s: str) -> str:
-    return s.strip().lower().replace("’", "").replace("'", "")
+    # Canonical key format: snake_case. This also provides back-compat for
+    # markers that used spaces ("grand knights report") by normalizing both to
+    # the same key ("grand_knights_report").
+    s = s.strip().lower().replace("’", "").replace("'", "")
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
 
 
 def marker_line_for_key(key: str) -> str:

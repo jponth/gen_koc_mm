@@ -45,11 +45,18 @@ def load_section_cues() -> CuesConfig:
     if not isinstance(data, dict):
         raise ValueError("section_cues.json must be an object mapping section keys to lists of regex strings")
 
+    def _norm_key(k: str) -> str:
+        # Canonical key format: snake_case (lowercase, underscores)
+        k = k.strip().lower().replace("’", "").replace("'", "")
+        k = re.sub(r"[^a-z0-9]+", "_", k)
+        k = re.sub(r"_+", "_", k).strip("_")
+        return k
+
     compiled: dict[str, list[re.Pattern[str]]] = {}
     for key, patterns in data.items():
         if not isinstance(key, str) or not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
             raise ValueError(f"Invalid section cues entry for {key!r}")
-        norm_key = key.strip().lower().replace("’", "").replace("'", "")
+        norm_key = _norm_key(key)
         compiled[norm_key] = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     return CuesConfig(cues=compiled)

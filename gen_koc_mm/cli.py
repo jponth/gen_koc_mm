@@ -17,6 +17,7 @@ from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_m
 from .prompting import minutes_system_prompt, minutes_user_prompt, validate_fewshot_config
 from .sections import SECTION_DEFS, SECTION_HEADINGS
 from .transcript import parse_transcript
+from .docx_merge import merge_minutes_into_docx
 
 app = typer.Typer(add_completion=False, help="Generate KoC meeting minutes from a transcript")
 console = Console()
@@ -37,17 +38,16 @@ def _safe_slug(s: str) -> str:
     return s or "section"
 
 
-def _render_minutes(*, section_to_bullets: dict[str, str]) -> str:
-    # Format: empty line before each section heading, section heading in bold on its own line.
-    out_lines: list[str] = []
-    for heading in SECTION_HEADINGS:
-        out_lines.append("")
-        out_lines.append(f"**{heading}**")
-        bullets = (section_to_bullets.get(heading) or "").strip()
-        if bullets:
-            out_lines.extend(bullets.splitlines())
-    # Ensure trailing newline
-    return "\n".join(out_lines).lstrip() + "\n"
+def _infer_date_of_meeting(*, input_path: Path, explicit: Optional[str]) -> str:
+    if explicit:
+        return explicit.strip()
+
+    # Best-effort inference from filename: look for YYYY-MM-DD.
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", input_path.name)
+    if m:
+        return m.group(1)
+
+    return ""
 
 
 @app.command()
@@ -62,7 +62,12 @@ def generate(
     generate_output: bool = typer.Option(
         False,
         "--generate-output",
-        help="Part 2: generate minutes using an intermediate transcript that already contains ** <section key> ** markers.",
+        help="Part 2: generate minutes JSON using an intermediate transcript that already contains ** <section key> ** markers.",
+    ),
+    date_of_meeting: Optional[str] = typer.Option(
+        None,
+        "--date-of-meeting",
+        help="Meeting date to embed in the JSON output. If omitted, we try to infer from the input filename (YYYY-MM-DD).",
     ),
     model: Optional[str] = typer.Option(None, "--model", help="OpenAI model name"),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
@@ -117,6 +122,8 @@ def generate(
     sys_p = minutes_system_prompt()
     model_name = model or "gpt-4o-mini"
 
+    heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
+
     section_to_bullets: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
 
     # Optional: write chunks for inspection
@@ -160,12 +167,68 @@ def generate(
         bullets = "\n".join([ln for ln in bullets_raw.splitlines() if ln.strip().startswith("-")]).strip()
         section_to_bullets[ch.heading] = bullets
 
-    minutes = _render_minutes(section_to_bullets=section_to_bullets)
+    # Build JSON payload (schema v1.0)
+    date_str = _infer_date_of_meeting(input_path=input, explicit=date_of_meeting)
+
+    section_status: dict[str, str] = {}
+    for ch in chunks:
+        if section_is_absent(ch):
+            section_status[ch.heading] = "absent"
+        else:
+            txt = (section_to_bullets.get(ch.heading) or "").strip()
+            section_status[ch.heading] = "ok" if txt else "empty"
+
+    payload = {
+        "schema_version": "1.0",
+        "date_of_meeting": date_str,
+        "generator": {
+            "name": "gen_koc_mm",
+            "version": "0.1.0",
+            "model": model_name,
+        },
+        "source": {
+            "input_file": input.name,
+        },
+        "sections": [
+            {
+                "section_key": heading_to_key.get(heading, heading.lower()),
+                "section_heading": heading,
+                "section_text": (section_to_bullets.get(heading) or "").strip(),
+                "format": "markdown",
+                "status": section_status.get(heading, "empty"),
+            }
+            for heading in SECTION_HEADINGS
+        ],
+    }
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(minutes, encoding="utf-8")
+    output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     console.print(f"Wrote: [bold]{output}[/bold]")
+
+
+@app.command(name="merge-docx")
+def merge_docx(
+    minutes_json: Path = typer.Option(..., "--minutes-json", exists=True, dir_okay=False),
+    template_docx: Path = typer.Option(..., "--template-docx", exists=True, dir_okay=False),
+    output_docx: Path = typer.Option(..., "--output-docx", dir_okay=False),
+):
+    """Merge minutes JSON into a Word (.docx) template.
+
+    The template should contain placeholders like:
+      - <<date_of_meeting>>
+      - <<grand_knights_report>>
+      - <<chaplains_report>>
+
+    Placeholders can appear in normal paragraphs or table cells.
+    """
+
+    summary = merge_minutes_into_docx(
+        minutes_json_path=minutes_json,
+        template_docx_path=template_docx,
+        output_docx_path=output_docx,
+    )
+    console.print_json(data=summary)
 
 
 @app.command(name="suggest-cues")

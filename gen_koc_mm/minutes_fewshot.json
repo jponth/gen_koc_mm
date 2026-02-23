@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "base_dir": "fewshot_examples",
+  "examples": [
+    {
+      "id": "global_style_01",
+      "title": "District Deputy Report - October 2025",
+      "section_key": "*",
+      "transcript_path": "global/global_style_01.transcript.txt",
+      "expected_path": "global/global_style_01.expected.md"
+    },
+    {
+      "id": "global_style_02",
+      "title": "District Deputy Report - November 2025",
+      "section_key": "*",
+      "transcript_path": "global/global_style_02.transcript.txt",
+      "expected_path": "global/global_style_02.expected.md"
+    },
+    {
+      "id": "global_style_03",
+      "title": "District Deputy Report - December 2025",
+      "section_key": "*",
+      "transcript_path": "global/global_style_03.transcript.txt",
+      "expected_path": "global/global_style_03.expected.md"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "chaplains_report": [
+    "\\bchaplain'?s\\s+report\\b"
+  ],
+  "grand_knights_report": [
+    "\\b(?:start\\s+with|start\\s+by|we'?ll\\s+start\\s+with|i'?ll\\s+start\\s+with|move\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to)\\s+(?:the\\s+)?grand\\s+knight(?:s)?\\s+report\\b",
+    "\\b(?:start\\s+with|start\\s+by|we'?ll\\s+start\\s+with|i'?ll\\s+start\\s+with|move\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to)\\s+(?:the\\s+)?grand\\s+knights\\s+report\\b",
+    "\\bgrand\\s+knights\\s+report\\b",
+    "\\bgrand\\s+knight\\s+report\\b"
+  ],
+  "treasurers_report": [
+    "\\bgo\\s+ahead\\s+with\\s+the\\s+treasury\\s+report\\b",
+    "\\bgo\\s+ahead\\s+with\\s+the\\s+treasurer'?s\\s+report\\b",
+    "\\bmove\\s+forward\\s+with\\s+the\\s+treasurer'?s\\s+report\\b",
+    "\\b(?:move\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to|next,\\s+we'?ll\\s+move\\s+on\\s+to)\\s+(?:the\\s+)?treasurer'?s\\s+report\\b",
+    "\\btreasurer'?s\\s+report\\b",
+    "\\btreasury\\s+report\\b"
+  ],
+  "financial_secretary_report": [
+    "\\bfinancial\\s+secretary\\b"
+  ],
+  "church_director_report": [
+    "\\bchurch\\s+director\\s+report\\b"
+  ],
+  "social_action_report": [
+    "\\bsocial\\s+action\\s+report\\b"
+  ],
+  "insurance_agent_report": [
+    "\\binsurance\\s+agent\\s+report\\b",
+    "\\bfield\\s+agent\\s+report\\b",
+    "\\bmove\\s+on\\s+to\\s+our\\s+insurance\\s+agent\\s+report\\b",
+    "\\b(?:don'?t\\s+see|do\\s+not\\s+see)\\s+our\\s+insurance\\s+agent\\b",
+    "\\binsurance\\s+agent\\b"
+  ],
+  "district_deputy_report": [
+    "\\bdistrict\\s+deputy\\s+report\\b",
+    "\\bdistrict\\s+deputy\\b"
+  ],
+  "4th_degree_report": [
+    "\\b(?:4th|fourth)\\s+degree\\s+report\\b"
+  ],
+  "old_business": [
+    "\\bmoving\\s+on\\s+to\\s+old\\s+business\\b",
+    "^\\s*old\\s+business\\b",
+    "\\bold\\s+business\\b"
+  ],
+  "new_business": [
+    "\\b(?:moving\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to)\\s+new\\s+business\\b",
+    "\\ball\\s+right,?\\s+new\\s+business\\b",
+    "^\\s*new\\s+business\\b",
+    "\\bnew\\s+business\\b"
+  ],
+  "birthdays": [
+    "\\bbirthdays\\b"
+  ],
+  "good_of_the_order": [
+    "\\bgood\\s+of\\s+the\\s+order\\b",
+    "\\bhello,?\\s+my\\s+brother\\b",
+    "\\btonight\\s+i\\s+would\\s+like\\s+to\\s+discuss\\b"
+  ],
+  "closing_prayers": [
+    "\\bclosing\\s+prayers?\\b",
+    "\\bspecial\\s+intentions\\b",
+    "\\bprayer\\s+for\\s+the\\s+canonization\\b",
+    "\\bwe'?ll\\s+all\\s+stand\\b"
+  ]
+}

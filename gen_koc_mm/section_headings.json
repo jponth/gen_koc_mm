@@ -1,0 +1,18 @@
+{
+  "sections": [
+    {"key": "chaplains_report", "heading": "Chaplain’s Report:"},
+    {"key": "grand_knights_report", "heading": "Grand Knights Report:"},
+    {"key": "treasurers_report", "heading": "Treasurer’s Report:"},
+    {"key": "financial_secretary_report", "heading": "Financial Secretary’s Report:"},
+    {"key": "church_director_report", "heading": "Church Director's Report:"},
+    {"key": "insurance_agent_report", "heading": "Insurance Agent Report:"},
+    {"key": "social_action_report", "heading": "Social Action Report:"},
+    {"key": "district_deputy_report", "heading": "District Deputy Report:"},
+    {"key": "4th_degree_report", "heading": "4th Degree Report:"},
+    {"key": "old_business", "heading": "Old Business:"},
+    {"key": "new_business", "heading": "New Business:"},
+    {"key": "birthdays", "heading": "Birthdays:"},
+    {"key": "good_of_the_order", "heading": "Good of the Order:"},
+    {"key": "closing_prayers", "heading": "Closing Prayers:"}
+  ]
+}

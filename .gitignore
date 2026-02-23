@@ -4,11 +4,14 @@ __pycache__/
 .env
 .DS_Store
 
-# Configurations in JSON filesca
-*.json
+# JSON output artifacts (project config JSON is tracked)
+# (The output/ folder is ignored already; this is just extra safety.)
+output/**/*.json
 
 # Generated outputs
 output/
+
+# Few-shot examples are part of the package (tracked)
 
 # Local data / samples
 input/
@@ -30,6 +33,9 @@ dist/
 .cursor/
 .vscode/
 .idea/
+
+# Word temp files
+templates/~$*.docx
 
 # Logs
 *.log
