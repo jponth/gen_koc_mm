@@ -1,0 +1,447 @@
+"""Gradio UI for gen_koc_mm.
+
+Local-only, upload-driven 5-step flow:
+  1) Audio -> transcript (Whisper CLI via Typer command)
+  2) Identify sections -> marked transcript (Typer)
+  3) Review/edit boundaries -> save-as marked transcript (UI only)
+  4) Generate minutes JSON from marked transcript (Typer)
+  5) Merge JSON into Word template (Typer)
+
+Run:
+  source .venv/bin/activate
+  python app_gradio.py
+
+This UI intentionally keeps gen_koc_mm CLI as the source of truth.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Tuple
+
+import gradio as gr
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_INPUT_DIR = REPO_ROOT / "input"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "output"
+DEFAULT_TEMPLATE = REPO_ROOT / "templates" / "KoC-Meeting-Minutes-Template-compatible.docx"
+
+
+def _now_slug() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _ensure_dirs() -> None:
+    DEFAULT_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _copy_upload_to(upload_path: str, dest: Path) -> Path:
+    src = Path(upload_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    return dest
+
+
+@dataclass(frozen=True)
+class CmdResult:
+    cmd: str
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def _run_cli(*args: str) -> CmdResult:
+    # Use the current interpreter so venv deps resolve.
+    cmd_list = [sys.executable, "-m", "gen_koc_mm", *args]
+    proc = subprocess.run(cmd_list, cwd=str(REPO_ROOT), text=True, capture_output=True)
+    return CmdResult(
+        cmd=" ".join(cmd_list),
+        returncode=proc.returncode,
+        stdout=proc.stdout or "",
+        stderr=proc.stderr or "",
+    )
+
+
+def _render_result(res: CmdResult) -> str:
+    parts = [f"$ {res.cmd}"]
+    if res.stdout.strip():
+        parts.append("\n[stdout]\n" + res.stdout.strip())
+    if res.stderr.strip():
+        parts.append("\n[stderr]\n" + res.stderr.strip())
+    parts.append(f"\n(exit code: {res.returncode})")
+    return "\n".join(parts).strip() + "\n"
+
+
+# -------------------------
+# Tab 1: Transcribe
+# -------------------------
+
+def ui_transcribe(
+    audio_file,  # gr.File returns a tempfile with .name
+    whisper_model: str,
+    language: str,
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """Returns (log, transcript_preview, transcript_path)."""
+    _ensure_dirs()
+    if audio_file is None:
+        return "Please upload an audio file.", None, None
+
+    audio_src = Path(audio_file.name)
+    out_path = DEFAULT_INPUT_DIR / f"{audio_src.stem}_{_now_slug()}.txt"
+
+    # Copy upload into project input/ for auditability.
+    copied_audio = DEFAULT_INPUT_DIR / f"{audio_src.stem}_{_now_slug()}{audio_src.suffix.lower()}"
+    _copy_upload_to(audio_src.as_posix(), copied_audio)
+
+    res = _run_cli(
+        "transcribe",
+        "--input-audio",
+        str(copied_audio),
+        "--output",
+        str(out_path),
+        "--whisper-model",
+        whisper_model.strip(),
+        "--language",
+        (language or "").strip(),
+        "--format",
+        "txt",
+    )
+
+    log = _render_result(res)
+    if res.returncode != 0:
+        return log, None, None
+
+    try:
+        preview = out_path.read_text(encoding="utf-8")
+    except Exception as e:
+        preview = f"(Transcribed OK, but failed to read output: {e})"
+
+    return log, preview, str(out_path)
+
+
+# -------------------------
+# Tab 2: Identify sections
+# -------------------------
+
+def ui_identify_sections(transcript_file, transcript_path_text: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """Returns (log, marked_preview, marked_path)."""
+    _ensure_dirs()
+
+    # Source can be from upload OR from a text path produced in Tab 1.
+    src_path: Optional[Path] = None
+    if transcript_file is not None:
+        src_path = Path(transcript_file.name)
+        # Copy uploaded transcript into input/.
+        dest = DEFAULT_INPUT_DIR / f"{src_path.stem}_{_now_slug()}{src_path.suffix or '.txt'}"
+        _copy_upload_to(src_path.as_posix(), dest)
+        src_path = dest
+    elif transcript_path_text:
+        src_path = Path(transcript_path_text).expanduser().resolve()
+
+    if src_path is None or not src_path.exists():
+        return "Please upload a transcript file (txt) or provide a valid transcript path.", None, None
+
+    out_path = DEFAULT_OUTPUT_DIR / f"marked_{src_path.stem}_{_now_slug()}.txt"
+    res = _run_cli(
+        "generate",
+        "--identify-sections",
+        "--input",
+        str(src_path),
+        "--output",
+        str(out_path),
+    )
+
+    log = _render_result(res)
+    if res.returncode != 0:
+        return log, None, None
+
+    preview = out_path.read_text(encoding="utf-8")
+    return log, preview, str(out_path)
+
+
+# -------------------------
+# Tab 3: Edit boundaries (Save As)
+# -------------------------
+
+def ui_load_marked(marked_file, marked_path_text: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """Load marked transcript into editor. Returns (status, content, loaded_path)."""
+    src_path: Optional[Path] = None
+    if marked_file is not None:
+        src_path = Path(marked_file.name)
+        dest = DEFAULT_OUTPUT_DIR / f"marked_uploaded_{src_path.stem}_{_now_slug()}{src_path.suffix or '.txt'}"
+        _copy_upload_to(src_path.as_posix(), dest)
+        src_path = dest
+    elif marked_path_text:
+        src_path = Path(marked_path_text).expanduser().resolve()
+
+    if src_path is None or not src_path.exists():
+        return "Please upload or provide the path to a marked transcript.", None, None
+
+    txt = src_path.read_text(encoding="utf-8")
+    return f"Loaded: {src_path}", txt, str(src_path)
+
+
+def ui_save_marked_as(content: str, base_name: str) -> Tuple[str, Optional[str]]:
+    """Save edited marked transcript into output/. Returns (status, saved_path)."""
+    _ensure_dirs()
+    if not content or not content.strip():
+        return "Nothing to save (editor is empty).", None
+
+    base = (base_name or "marked_edited").strip()
+    base = base.replace(".txt", "")
+    out_path = DEFAULT_OUTPUT_DIR / f"{base}_{_now_slug()}.txt"
+    out_path.write_text(content, encoding="utf-8")
+    return f"Saved: {out_path}", str(out_path)
+
+
+# -------------------------
+# Tab 4: Generate JSON
+# -------------------------
+
+def ui_generate_json(
+    marked_file,
+    marked_path_text: str,
+    date_of_meeting: str,
+    model_override: str,
+    debug_chunks: bool,
+) -> Tuple[str, Optional[str], Optional[str]]:
+    _ensure_dirs()
+
+    src_path: Optional[Path] = None
+    if marked_file is not None:
+        src_path = Path(marked_file.name)
+        dest = DEFAULT_OUTPUT_DIR / f"marked_for_json_{src_path.stem}_{_now_slug()}{src_path.suffix or '.txt'}"
+        _copy_upload_to(src_path.as_posix(), dest)
+        src_path = dest
+    elif marked_path_text:
+        src_path = Path(marked_path_text).expanduser().resolve()
+
+    if src_path is None or not src_path.exists():
+        return "Please upload/provide a marked transcript to generate JSON.", None, None
+
+    out_path = DEFAULT_OUTPUT_DIR / f"minutes_{src_path.stem}_{_now_slug()}.json"
+
+    args = [
+        "generate",
+        "--generate-output",
+        "--input",
+        str(src_path),
+        "--output",
+        str(out_path),
+    ]
+    if date_of_meeting and date_of_meeting.strip():
+        args += ["--date-of-meeting", date_of_meeting.strip()]
+    if model_override and model_override.strip():
+        args += ["--model", model_override.strip()]
+    if debug_chunks:
+        args += ["--debug-chunks"]
+
+    res = _run_cli(*args)
+    log = _render_result(res)
+    if res.returncode != 0:
+        return log, None, None
+
+    preview = out_path.read_text(encoding="utf-8")
+    return log, preview, str(out_path)
+
+
+# -------------------------
+# Tab 5: Merge DOCX
+# -------------------------
+
+def ui_merge_docx(
+    minutes_json_file,
+    minutes_json_path_text: str,
+    template_docx_file,
+    use_default_template: bool,
+) -> Tuple[str, Optional[str]]:
+    _ensure_dirs()
+
+    json_path: Optional[Path] = None
+    if minutes_json_file is not None:
+        json_path = Path(minutes_json_file.name)
+        dest = DEFAULT_OUTPUT_DIR / f"minutes_uploaded_{json_path.stem}_{_now_slug()}{json_path.suffix or '.json'}"
+        _copy_upload_to(json_path.as_posix(), dest)
+        json_path = dest
+    elif minutes_json_path_text:
+        json_path = Path(minutes_json_path_text).expanduser().resolve()
+
+    if json_path is None or not json_path.exists():
+        return "Please upload/provide minutes JSON.", None
+
+    template_path: Optional[Path] = None
+    if use_default_template:
+        template_path = DEFAULT_TEMPLATE
+    elif template_docx_file is not None:
+        template_path = Path(template_docx_file.name)
+        dest = DEFAULT_OUTPUT_DIR / f"template_{template_path.stem}_{_now_slug()}{template_path.suffix or '.docx'}"
+        _copy_upload_to(template_path.as_posix(), dest)
+        template_path = dest
+
+    if template_path is None or not template_path.exists():
+        return "Please select the default template or upload a DOCX template.", None
+
+    out_docx = DEFAULT_OUTPUT_DIR / f"minutes_{json_path.stem}_{_now_slug()}.docx"
+
+    res = _run_cli(
+        "merge-docx",
+        "--minutes-json",
+        str(json_path),
+        "--template-docx",
+        str(template_path),
+        "--output-docx",
+        str(out_docx),
+    )
+
+    log = _render_result(res)
+    if res.returncode != 0:
+        return log, None
+
+    return log, str(out_docx)
+
+
+def build_ui() -> gr.Blocks:
+    with gr.Blocks(title="KoC Meeting Minutes Generator") as demo:
+        gr.Markdown(
+            "# KoC Meeting Minutes Generator\n"
+            "Local-only UI for the 5-step workflow. Upload-only (no file picking).\n\n"
+            "Tip: keep outputs under versioned filenames; Tab 3 uses Save As for auditability."
+        )
+
+        # Shared state outputs
+        st_transcript_path = gr.State(value="")
+        st_marked_path = gr.State(value="")
+        st_edited_marked_path = gr.State(value="")
+        st_minutes_json_path = gr.State(value="")
+
+        with gr.Tabs():
+            # 1) Transcribe
+            with gr.Tab("1) Audio → Transcript"):
+                audio = gr.File(label="Upload audio (m4a/mp3/wav)")
+                with gr.Accordion("Advanced options", open=False):
+                    whisper_model = gr.Textbox(value="medium", label="Whisper model")
+                    language = gr.Textbox(value="en", label="Language (e.g., en). Leave blank for auto-detect")
+
+                run_btn = gr.Button("Transcribe")
+                log = gr.Textbox(label="Command log", lines=10)
+                preview = gr.Textbox(label="Transcript preview", lines=18)
+                out_path = gr.Textbox(label="Transcript path (saved)", interactive=False)
+
+                run_btn.click(
+                    ui_transcribe,
+                    inputs=[audio, whisper_model, language],
+                    outputs=[log, preview, out_path],
+                ).then(lambda p: p or "", inputs=[out_path], outputs=[st_transcript_path])
+
+            # 2) Identify sections
+            with gr.Tab("2) Identify Sections"):
+                transcript_upload = gr.File(label="Upload transcript (.txt)")
+                transcript_path_echo = gr.Textbox(
+                    label="Or use transcript from Tab 1 (path)",
+                    interactive=False,
+                )
+                run_btn2 = gr.Button("Identify sections")
+                log2 = gr.Textbox(label="Command log", lines=10)
+                marked_preview = gr.Textbox(label="Marked transcript preview", lines=18)
+                marked_path = gr.Textbox(label="Marked transcript path (saved)", interactive=False)
+
+                demo.load(lambda p: p, inputs=[st_transcript_path], outputs=[transcript_path_echo])
+
+                run_btn2.click(
+                    ui_identify_sections,
+                    inputs=[transcript_upload, transcript_path_echo],
+                    outputs=[log2, marked_preview, marked_path],
+                ).then(lambda p: p or "", inputs=[marked_path], outputs=[st_marked_path])
+
+            # 3) Edit boundaries
+            with gr.Tab("3) Review/Edit Boundaries"):
+                marked_upload = gr.File(label="Upload marked transcript (.txt)")
+                marked_path_echo = gr.Textbox(label="Or use marked transcript from Tab 2 (path)", interactive=False)
+                load_btn = gr.Button("Load into editor")
+                status3 = gr.Textbox(label="Status", lines=2)
+                editor = gr.Textbox(label="Marked transcript editor", lines=22)
+
+                with gr.Row():
+                    save_base = gr.Textbox(value="marked_edited", label="Save As base name")
+                    save_btn = gr.Button("Save As")
+
+                saved_path = gr.Textbox(label="Saved edited marked transcript path", interactive=False)
+
+                demo.load(lambda p: p, inputs=[st_marked_path], outputs=[marked_path_echo])
+
+                load_btn.click(
+                    ui_load_marked,
+                    inputs=[marked_upload, marked_path_echo],
+                    outputs=[status3, editor, marked_path_echo],
+                )
+
+                save_btn.click(
+                    ui_save_marked_as,
+                    inputs=[editor, save_base],
+                    outputs=[status3, saved_path],
+                ).then(lambda p: p or "", inputs=[saved_path], outputs=[st_edited_marked_path])
+
+            # 4) Generate JSON
+            with gr.Tab("4) Generate JSON"):
+                marked_upload4 = gr.File(label="Upload edited marked transcript (.txt)")
+                marked_path_echo4 = gr.Textbox(label="Or use edited marked transcript from Tab 3 (path)", interactive=False)
+
+                with gr.Accordion("Advanced options", open=False):
+                    date_of_meeting = gr.Textbox(label="Date of meeting (YYYY-MM-DD)")
+                    model_override = gr.Textbox(label="Model override (optional)")
+                    debug_chunks = gr.Checkbox(value=False, label="Write debug chunks")
+
+                run_btn4 = gr.Button("Generate minutes JSON")
+                log4 = gr.Textbox(label="Command log", lines=10)
+                json_preview = gr.Textbox(label="Minutes JSON preview", lines=18)
+                json_path = gr.Textbox(label="Minutes JSON path (saved)", interactive=False)
+
+                demo.load(lambda p: p, inputs=[st_edited_marked_path], outputs=[marked_path_echo4])
+
+                run_btn4.click(
+                    ui_generate_json,
+                    inputs=[marked_upload4, marked_path_echo4, date_of_meeting, model_override, debug_chunks],
+                    outputs=[log4, json_preview, json_path],
+                ).then(lambda p: p or "", inputs=[json_path], outputs=[st_minutes_json_path])
+
+            # 5) Merge DOCX
+            with gr.Tab("5) Merge to Word"):
+                minutes_json_upload = gr.File(label="Upload minutes JSON (.json)")
+                minutes_json_path_echo = gr.Textbox(label="Or use JSON from Tab 4 (path)", interactive=False)
+
+                use_default_template = gr.Checkbox(value=True, label=f"Use default template ({DEFAULT_TEMPLATE.name})")
+                template_upload = gr.File(label="Upload a DOCX template (optional if using default)")
+
+                run_btn5 = gr.Button("Merge DOCX")
+                log5 = gr.Textbox(label="Command log", lines=10)
+                out_docx_path = gr.Textbox(label="Output DOCX path (saved)", interactive=False)
+
+                demo.load(lambda p: p, inputs=[st_minutes_json_path], outputs=[minutes_json_path_echo])
+
+                run_btn5.click(
+                    ui_merge_docx,
+                    inputs=[minutes_json_upload, minutes_json_path_echo, template_upload, use_default_template],
+                    outputs=[log5, out_docx_path],
+                )
+
+        gr.Markdown(
+            "---\n"
+            "Notes:\n"
+            "- This UI executes the existing Typer commands via `python -m gen_koc_mm ...`.\n"
+            "- All uploads are copied into `input/` or `output/` with timestamped names.\n"
+            "- Tab 3 uses Save As to preserve an audit trail."
+        )
+
+    return demo
+
+
+if __name__ == "__main__":
+    ui = build_ui()
+    ui.launch()

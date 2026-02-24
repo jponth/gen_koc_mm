@@ -63,6 +63,27 @@ export OPENAI_API_KEY=YOUR_KEY_HERE
 export OPENAI_MODEL=gpt-4o-mini
 ```
 
+## UI (Gradio)
+
+Local-only, upload-driven UI with 5 tabs matching the workflow:
+1) audio → transcript
+2) identify sections
+3) review/edit boundaries (Save As)
+4) generate minutes JSON
+5) merge JSON into Word template
+
+Run:
+
+```bash
+cd /Users/jponthempilly/openclaw_projects/gen_koc_mm
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app_gradio.py
+```
+
+Then open the local URL Gradio prints (usually http://127.0.0.1:7860).
+
 ## CLI
 
 This package exposes a Typer CLI:
