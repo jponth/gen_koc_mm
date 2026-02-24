@@ -18,6 +18,7 @@ from .prompting import minutes_system_prompt, minutes_user_prompt, validate_fews
 from .sections import SECTION_DEFS, SECTION_HEADINGS
 from .transcript import parse_transcript
 from .docx_merge import merge_minutes_into_docx
+from .transcribe import transcribe_with_whisper_cli
 
 app = typer.Typer(add_completion=False, help="Generate KoC meeting minutes from a transcript")
 console = Console()
@@ -205,6 +206,37 @@ def generate(
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     console.print(f"Wrote: [bold]{output}[/bold]")
+
+
+@app.command(name="transcribe")
+def transcribe(
+    input_audio: Path = typer.Option(..., "--input-audio", exists=True, dir_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+    whisper_model: str = typer.Option("medium", "--whisper-model", help="Whisper model name (tiny|base|small|medium|large)") ,
+    language: Optional[str] = typer.Option(
+        "en",
+        "--language",
+        help="Audio language (e.g. en). If omitted, whisper will auto-detect.",
+    ),
+    format: str = typer.Option("txt", "--format", help="Whisper output format (txt|vtt|srt|tsv|json)"),
+):
+    """Transcribe an audio file locally using the Whisper CLI.
+
+    This uses the local `whisper` binary (no API calls).
+
+    Example:
+      python -m gen_koc_mm transcribe --input-audio meeting.m4a --output input/meeting.txt
+    """
+
+    res = transcribe_with_whisper_cli(
+        input_audio=input_audio,
+        output_path=output,
+        model=whisper_model,
+        language=language,
+        output_format=format,
+    )
+
+    console.print(f"Wrote transcript: [bold]{res.output_path}[/bold]")
 
 
 @app.command(name="merge-docx")

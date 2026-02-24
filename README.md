@@ -26,11 +26,22 @@ If a section has no content (or the transcript indicates the person is not prese
 
 ## Install
 
+### Python deps
+
 ```bash
 cd /Users/jponthempilly/openclaw_projects/gen_koc_mm
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+### Local Whisper (for m4a → transcript)
+
+This project uses the **local** Whisper CLI (no API calls):
+
+```bash
+brew install openai-whisper
+whisper --help
 ```
 
 ## Configure OpenAI
@@ -56,9 +67,25 @@ export OPENAI_MODEL=gpt-4o-mini
 
 This package exposes a Typer CLI:
 
+- `python -m gen_koc_mm transcribe` — transcribe an audio file locally to a transcript file (Whisper CLI)
 - `python -m gen_koc_mm generate` — main minutes generation workflow (outputs JSON in phase 2)
 - `python -m gen_koc_mm merge-docx` — merge minutes JSON into a Word (.docx) template using placeholders
 - `python -m gen_koc_mm suggest-cues` — discover/update section boundary cues
+
+### `transcribe`
+
+Transcribe audio (e.g. `.m4a`) locally into a transcript file.
+
+```bash
+python -m gen_koc_mm transcribe \
+  --input-audio /path/to/meeting.m4a \
+  --output input/meeting.txt \
+  --whisper-model medium \
+  --language en \
+  --format txt
+```
+
+Then use the transcript file with `generate`.
 
 ### `generate`
 
