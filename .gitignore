@@ -12,6 +12,7 @@ output/**/*.json
 output/
 
 # Few-shot examples are part of the package (tracked)
+fewshot_examples/
 
 # Local data / samples
 input/
@@ -35,7 +36,7 @@ dist/
 .idea/
 
 # Word temp files
-templates/~$*.docx
+templates/
 
 # Logs
 *.log
