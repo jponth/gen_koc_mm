@@ -334,12 +334,6 @@ def build_ui() -> gr.Blocks:
                 preview = gr.Textbox(label="Transcript preview", lines=18)
                 out_path = gr.Textbox(label="Transcript path (saved)", interactive=False)
 
-                run_btn.click(
-                    ui_transcribe,
-                    inputs=[audio, whisper_model, language],
-                    outputs=[log, preview, out_path],
-                ).then(lambda p: p or "", inputs=[out_path], outputs=[st_transcript_path])
-
             # 2) Identify sections
             with gr.Tab("2) Identify Sections"):
                 transcript_upload = gr.File(label="Upload transcript (.txt)")
@@ -351,14 +345,6 @@ def build_ui() -> gr.Blocks:
                 log2 = gr.Textbox(label="Command log", lines=10)
                 marked_preview = gr.Textbox(label="Marked transcript preview", lines=18)
                 marked_path = gr.Textbox(label="Marked transcript path (saved)", interactive=False)
-
-                demo.load(lambda p: p, inputs=[st_transcript_path], outputs=[transcript_path_echo])
-
-                run_btn2.click(
-                    ui_identify_sections,
-                    inputs=[transcript_upload, transcript_path_echo],
-                    outputs=[log2, marked_preview, marked_path],
-                ).then(lambda p: p or "", inputs=[marked_path], outputs=[st_marked_path])
 
             # 3) Edit boundaries
             with gr.Tab("3) Review/Edit Boundaries"):
@@ -373,20 +359,6 @@ def build_ui() -> gr.Blocks:
                     save_btn = gr.Button("Save As")
 
                 saved_path = gr.Textbox(label="Saved edited marked transcript path", interactive=False)
-
-                demo.load(lambda p: p, inputs=[st_marked_path], outputs=[marked_path_echo])
-
-                load_btn.click(
-                    ui_load_marked,
-                    inputs=[marked_upload, marked_path_echo],
-                    outputs=[status3, editor, marked_path_echo],
-                )
-
-                save_btn.click(
-                    ui_save_marked_as,
-                    inputs=[editor, save_base],
-                    outputs=[status3, saved_path],
-                ).then(lambda p: p or "", inputs=[saved_path], outputs=[st_edited_marked_path])
 
             # 4) Generate JSON
             with gr.Tab("4) Generate JSON"):
@@ -403,14 +375,6 @@ def build_ui() -> gr.Blocks:
                 json_preview = gr.Textbox(label="Minutes JSON preview", lines=18)
                 json_path = gr.Textbox(label="Minutes JSON path (saved)", interactive=False)
 
-                demo.load(lambda p: p, inputs=[st_edited_marked_path], outputs=[marked_path_echo4])
-
-                run_btn4.click(
-                    ui_generate_json,
-                    inputs=[marked_upload4, marked_path_echo4, date_of_meeting, model_override, debug_chunks],
-                    outputs=[log4, json_preview, json_path],
-                ).then(lambda p: p or "", inputs=[json_path], outputs=[st_minutes_json_path])
-
             # 5) Merge DOCX
             with gr.Tab("5) Merge to Word"):
                 minutes_json_upload = gr.File(label="Upload minutes JSON (.json)")
@@ -423,13 +387,58 @@ def build_ui() -> gr.Blocks:
                 log5 = gr.Textbox(label="Command log", lines=10)
                 out_docx_path = gr.Textbox(label="Output DOCX path (saved)", interactive=False)
 
-                demo.load(lambda p: p, inputs=[st_minutes_json_path], outputs=[minutes_json_path_echo])
+            # --- Wiring (cross-tab propagation) ---
+            run_btn.click(
+                ui_transcribe,
+                inputs=[audio, whisper_model, language],
+                outputs=[log, preview, out_path],
+            ).then(
+                lambda p: p or "",
+                inputs=[out_path],
+                outputs=[st_transcript_path, transcript_path_echo],
+            )
 
-                run_btn5.click(
-                    ui_merge_docx,
-                    inputs=[minutes_json_upload, minutes_json_path_echo, template_upload, use_default_template],
-                    outputs=[log5, out_docx_path],
-                )
+            run_btn2.click(
+                ui_identify_sections,
+                inputs=[transcript_upload, transcript_path_echo],
+                outputs=[log2, marked_preview, marked_path],
+            ).then(
+                lambda p: p or "",
+                inputs=[marked_path],
+                outputs=[st_marked_path, marked_path_echo],
+            )
+
+            load_btn.click(
+                ui_load_marked,
+                inputs=[marked_upload, marked_path_echo],
+                outputs=[status3, editor, marked_path_echo],
+            )
+
+            save_btn.click(
+                ui_save_marked_as,
+                inputs=[editor, save_base],
+                outputs=[status3, saved_path],
+            ).then(
+                lambda p: p or "",
+                inputs=[saved_path],
+                outputs=[st_edited_marked_path, marked_path_echo4],
+            )
+
+            run_btn4.click(
+                ui_generate_json,
+                inputs=[marked_upload4, marked_path_echo4, date_of_meeting, model_override, debug_chunks],
+                outputs=[log4, json_preview, json_path],
+            ).then(
+                lambda p: p or "",
+                inputs=[json_path],
+                outputs=[st_minutes_json_path, minutes_json_path_echo],
+            )
+
+            run_btn5.click(
+                ui_merge_docx,
+                inputs=[minutes_json_upload, minutes_json_path_echo, template_upload, use_default_template],
+                outputs=[log5, out_docx_path],
+            )
 
         gr.Markdown(
             "---\n"
