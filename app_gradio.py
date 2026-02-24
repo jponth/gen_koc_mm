@@ -393,7 +393,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[audio, whisper_model, language],
                 outputs=[log, preview, out_path],
             ).then(
-                lambda p: p or "",
+                lambda p: (p or "", p or ""),
                 inputs=[out_path],
                 outputs=[st_transcript_path, transcript_path_echo],
             )
@@ -403,7 +403,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[transcript_upload, transcript_path_echo],
                 outputs=[log2, marked_preview, marked_path],
             ).then(
-                lambda p: p or "",
+                lambda p: (p or "", p or ""),
                 inputs=[marked_path],
                 outputs=[st_marked_path, marked_path_echo],
             )
@@ -419,7 +419,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[editor, save_base],
                 outputs=[status3, saved_path],
             ).then(
-                lambda p: p or "",
+                lambda p: (p or "", p or ""),
                 inputs=[saved_path],
                 outputs=[st_edited_marked_path, marked_path_echo4],
             )
@@ -429,7 +429,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[marked_upload4, marked_path_echo4, date_of_meeting, model_override, debug_chunks],
                 outputs=[log4, json_preview, json_path],
             ).then(
-                lambda p: p or "",
+                lambda p: (p or "", p or ""),
                 inputs=[json_path],
                 outputs=[st_minutes_json_path, minutes_json_path_echo],
             )
