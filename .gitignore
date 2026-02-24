@@ -11,7 +11,7 @@ output/**/*.json
 # Generated outputs
 output/
 
-# Few-shot examples are part of the package (tracked)
+# Few-shot examples are not part of the package.
 fewshot_examples/
 
 # Local data / samples
@@ -35,7 +35,7 @@ dist/
 .vscode/
 .idea/
 
-# Word temp files
+# Word template files
 templates/
 
 # Logs
