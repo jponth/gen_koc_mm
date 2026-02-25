@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -30,11 +30,16 @@ import gradio as gr
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = REPO_ROOT / "input"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "output"
-DEFAULT_TEMPLATE = REPO_ROOT / "templates" / "KoC-Meeting-Minutes-Template-compatible.docx"
+DEFAULT_TEMPLATE = REPO_ROOT / "templates" / "KoC-Meeting-Minutes-Template-v02.docx"
 
 
 def _now_slug() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _today_iso() -> str:
+    """Return today's date in YYYY-MM-DD (local time)."""
+    return date.today().isoformat()
 
 
 def _ensure_dirs() -> None:
@@ -208,7 +213,7 @@ def ui_save_marked_as(content: str, base_name: str) -> Tuple[str, Optional[str]]
 def ui_generate_json(
     marked_file,
     marked_path_text: str,
-    date_of_meeting: str,
+    date_of_meeting,
     model_override: str,
     debug_chunks: bool,
 ) -> Tuple[str, Optional[str], Optional[str]]:
@@ -236,8 +241,23 @@ def ui_generate_json(
         "--output",
         str(out_path),
     ]
-    if date_of_meeting and date_of_meeting.strip():
-        args += ["--date-of-meeting", date_of_meeting.strip()]
+    # gr.DateTime can return timestamp (float), datetime, or string depending on `type=`.
+    date_str: str = ""
+    if date_of_meeting is None:
+        date_str = ""
+    elif isinstance(date_of_meeting, (datetime, date)):
+        date_str = date_of_meeting.date().isoformat() if isinstance(date_of_meeting, datetime) else date_of_meeting.isoformat()
+    elif isinstance(date_of_meeting, (int, float)):
+        # timestamp seconds
+        date_str = datetime.fromtimestamp(date_of_meeting).date().isoformat()
+    else:
+        date_str = str(date_of_meeting).strip()
+        # If something like "YYYY-MM-DD 00:00:00" slips through, keep the date part.
+        if len(date_str) >= 10 and date_str[4:5] == "-" and date_str[7:8] == "-":
+            date_str = date_str[:10]
+
+    if date_str:
+        args += ["--date-of-meeting", date_str]
     if model_override and model_override.strip():
         args += ["--model", model_override.strip()]
     if debug_chunks:
@@ -374,9 +394,9 @@ def build_ui() -> gr.Blocks:
                     language = gr.Textbox(value="en", label="Language (e.g., en). Leave blank for auto-detect")
 
                 run_btn = gr.Button("Transcribe")
-                log = gr.Textbox(label="Command log", lines=10)
-                preview = gr.Textbox(label="Transcript preview", lines=18)
                 out_path = gr.Textbox(label="Transcript path (saved)", interactive=False)
+                preview = gr.Textbox(label="Transcript preview", lines=18)
+                log = gr.Textbox(label="Command log", lines=10)
 
             # 2) Identify sections
             with gr.Tab("2) Identify Sections"):
@@ -386,10 +406,9 @@ def build_ui() -> gr.Blocks:
                     interactive=False,
                 )
                 run_btn2 = gr.Button("Identify sections")
-                log2 = gr.Textbox(label="Command log", lines=10)
-                marked_preview = gr.Textbox(label="Marked transcript preview", lines=18)
                 marked_path = gr.Textbox(label="Marked transcript path (saved)", interactive=False)
-
+                marked_preview = gr.Textbox(label="Marked transcript preview", lines=18)
+                log2 = gr.Textbox(label="Command log", lines=10)
             # 3) Edit boundaries
             with gr.Tab("3) Review/Edit Boundaries"):
                 marked_upload = gr.File(label="Upload marked transcript (.txt)", elem_classes=["compact-upload"])
@@ -409,15 +428,22 @@ def build_ui() -> gr.Blocks:
                 marked_upload4 = gr.File(label="Upload edited marked transcript (.txt)", elem_classes=["compact-upload"])
                 marked_path_echo4 = gr.Textbox(label="Or use edited marked transcript from Tab 3 (path)", interactive=False)
 
+                # Keep this prominent (not tucked into Advanced options)
+                date_of_meeting = gr.DateTime(
+                    value=_today_iso(),
+                    include_time=False,
+                    type="string",
+                    label="Date of meeting",
+                )
+
                 with gr.Accordion("Advanced options", open=False):
-                    date_of_meeting = gr.Textbox(label="Date of meeting (YYYY-MM-DD)")
                     model_override = gr.Textbox(label="Model override (optional)")
                     debug_chunks = gr.Checkbox(value=False, label="Write debug chunks")
 
                 run_btn4 = gr.Button("Generate minutes JSON")
-                log4 = gr.Textbox(label="Command log", lines=10)
-                json_preview = gr.Textbox(label="Minutes JSON preview", lines=18)
                 json_path = gr.Textbox(label="Minutes JSON path (saved)", interactive=False)
+                json_preview = gr.Textbox(label="Minutes JSON preview", lines=18)
+                log4 = gr.Textbox(label="Command log", lines=10)
 
             # 5) Merge DOCX
             with gr.Tab("5) Merge to Word"):
@@ -428,8 +454,8 @@ def build_ui() -> gr.Blocks:
                 template_upload = gr.File(label="Upload a DOCX template (optional if using default)", elem_classes=["compact-upload"])
 
                 run_btn5 = gr.Button("Merge DOCX")
-                log5 = gr.Textbox(label="Command log", lines=10)
                 out_docx_path = gr.Textbox(label="Output DOCX path (saved)", interactive=False)
+                log5 = gr.Textbox(label="Command log", lines=10)
 
             # --- Wiring (cross-tab propagation) ---
             run_btn.click(

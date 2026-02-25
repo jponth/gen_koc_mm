@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,34 @@ def _pick_bullet_style_name(doc: Document) -> str | None:
     return None
 
 
+def _format_date_mmm_dd_yyyy(date_str: str) -> str:
+    """Format YYYY-MM-DD -> 'Mon DD, YYYY'.
+
+    If parsing fails, returns the original string.
+    """
+    raw = (date_str or "").strip()
+    if not raw:
+        return ""
+
+    # Accept strict ISO date first.
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%b %d, %Y")
+        except ValueError:
+            pass
+
+    # If we got a timestamp-ish string like 'YYYY-MM-DD ...', take the date part.
+    if len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-":
+        try:
+            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
+            return dt.strftime("%b %d, %Y")
+        except ValueError:
+            pass
+
+    return raw
+
+
 def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path, output_docx_path: Path) -> dict[str, Any]:
     minutes = load_minutes_json(minutes_json_path)
 
@@ -169,8 +198,9 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
 
     # Special top-level placeholder (optional)
     date_placeholder = "<<date_of_meeting>>"
+    formatted_date = _format_date_mmm_dd_yyyy(minutes.date_of_meeting)
     for p in _iter_all_paragraphs(doc):
-        if _replace_placeholder_in_paragraph(p, date_placeholder, minutes.date_of_meeting, bullet_style=bullet_style):
+        if _replace_placeholder_in_paragraph(p, date_placeholder, formatted_date, bullet_style=bullet_style):
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
