@@ -311,15 +311,36 @@ def build_ui() -> gr.Blocks:
     css = """
     /* Make Gradio file upload dropzones more compact */
     .compact-upload [data-testid='file-upload'] {
-        min-height: 70px !important;
-        height: 70px !important;
-        padding: 6px 10px !important;
+        min-height: 36px !important;
+        height: 36px !important;
+        padding: 2px 10px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px !important;
     }
+
+    /* Keep the dropzone text on one line */
     .compact-upload [data-testid='file-upload'] * {
         font-size: 0.95rem;
+        line-height: 1.1;
+        white-space: nowrap;
     }
+
+    /* Some Gradio themes wrap the message in a .wrap container */
     .compact-upload .wrap {
-        min-height: 70px !important;
+        min-height: 36px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px !important;
+        white-space: nowrap;
+    }
+
+    /* In case the message is split into multiple <p> tags, make them inline */
+    .compact-upload p {
+        margin: 0 !important;
+        display: inline !important;
     }
     """
 
