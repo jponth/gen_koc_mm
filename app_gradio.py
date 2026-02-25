@@ -308,7 +308,22 @@ def ui_merge_docx(
 
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="KoC Meeting Minutes Generator") as demo:
+    css = """
+    /* Make Gradio file upload dropzones more compact */
+    .compact-upload [data-testid='file-upload'] {
+        min-height: 70px !important;
+        height: 70px !important;
+        padding: 6px 10px !important;
+    }
+    .compact-upload [data-testid='file-upload'] * {
+        font-size: 0.95rem;
+    }
+    .compact-upload .wrap {
+        min-height: 70px !important;
+    }
+    """
+
+    with gr.Blocks(title="KoC Meeting Minutes Generator", css=css) as demo:
         gr.Markdown(
             "# KoC Meeting Minutes Generator\n"
             "Local-only UI for the 5-step workflow. Upload-only (no file picking).\n\n"
@@ -324,7 +339,7 @@ def build_ui() -> gr.Blocks:
         with gr.Tabs():
             # 1) Transcribe
             with gr.Tab("1) Audio → Transcript"):
-                audio = gr.File(label="Upload audio (m4a/mp3/wav)")
+                audio = gr.File(label="Upload audio (m4a/mp3/wav)", elem_classes=["compact-upload"])
                 with gr.Accordion("Advanced options", open=False):
                     whisper_model = gr.Textbox(value="medium", label="Whisper model")
                     language = gr.Textbox(value="en", label="Language (e.g., en). Leave blank for auto-detect")
@@ -336,7 +351,7 @@ def build_ui() -> gr.Blocks:
 
             # 2) Identify sections
             with gr.Tab("2) Identify Sections"):
-                transcript_upload = gr.File(label="Upload transcript (.txt)")
+                transcript_upload = gr.File(label="Upload transcript (.txt)", elem_classes=["compact-upload"])
                 transcript_path_echo = gr.Textbox(
                     label="Or use transcript from Tab 1 (path)",
                     interactive=False,
@@ -348,7 +363,7 @@ def build_ui() -> gr.Blocks:
 
             # 3) Edit boundaries
             with gr.Tab("3) Review/Edit Boundaries"):
-                marked_upload = gr.File(label="Upload marked transcript (.txt)")
+                marked_upload = gr.File(label="Upload marked transcript (.txt)", elem_classes=["compact-upload"])
                 marked_path_echo = gr.Textbox(label="Or use marked transcript from Tab 2 (path)", interactive=False)
                 load_btn = gr.Button("Load into editor")
                 status3 = gr.Textbox(label="Status", lines=2)
@@ -362,7 +377,7 @@ def build_ui() -> gr.Blocks:
 
             # 4) Generate JSON
             with gr.Tab("4) Generate JSON"):
-                marked_upload4 = gr.File(label="Upload edited marked transcript (.txt)")
+                marked_upload4 = gr.File(label="Upload edited marked transcript (.txt)", elem_classes=["compact-upload"])
                 marked_path_echo4 = gr.Textbox(label="Or use edited marked transcript from Tab 3 (path)", interactive=False)
 
                 with gr.Accordion("Advanced options", open=False):
@@ -377,11 +392,11 @@ def build_ui() -> gr.Blocks:
 
             # 5) Merge DOCX
             with gr.Tab("5) Merge to Word"):
-                minutes_json_upload = gr.File(label="Upload minutes JSON (.json)")
+                minutes_json_upload = gr.File(label="Upload minutes JSON (.json)", elem_classes=["compact-upload"])
                 minutes_json_path_echo = gr.Textbox(label="Or use JSON from Tab 4 (path)", interactive=False)
 
                 use_default_template = gr.Checkbox(value=True, label=f"Use default template ({DEFAULT_TEMPLATE.name})")
-                template_upload = gr.File(label="Upload a DOCX template (optional if using default)")
+                template_upload = gr.File(label="Upload a DOCX template (optional if using default)", elem_classes=["compact-upload"])
 
                 run_btn5 = gr.Button("Merge DOCX")
                 log5 = gr.Textbox(label="Command log", lines=10)
