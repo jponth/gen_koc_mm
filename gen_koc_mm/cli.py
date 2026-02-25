@@ -70,7 +70,7 @@ def generate(
         "--date-of-meeting",
         help="Meeting date to embed in the JSON output. If omitted, we try to infer from the input filename (YYYY-MM-DD).",
     ),
-    model: Optional[str] = typer.Option(None, "--model", help="OpenAI model name"),
+    model: str = typer.Option("gpt-4o-mini", "--model", help="OpenAI model name"),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
 ):
     """Generate KoC meeting minutes.
@@ -121,7 +121,7 @@ def generate(
     chunks = parse_marked_transcript(raw)
 
     sys_p = minutes_system_prompt()
-    model_name = model or "gpt-4o-mini"
+    model_name = model
 
     heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
 

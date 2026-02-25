@@ -437,7 +437,7 @@ def build_ui() -> gr.Blocks:
                 )
 
                 with gr.Accordion("Advanced options", open=False):
-                    model_override = gr.Textbox(label="Model override (optional)")
+                    model_override = gr.Textbox(value="gpt-4o-mini", label="Model (OpenAI)")
                     debug_chunks = gr.Checkbox(value=False, label="Write debug chunks")
 
                 run_btn4 = gr.Button("Generate minutes JSON")
