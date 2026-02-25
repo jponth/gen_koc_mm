@@ -309,38 +309,46 @@ def ui_merge_docx(
 
 def build_ui() -> gr.Blocks:
     css = """
-    /* Make Gradio file upload dropzones more compact */
-    .compact-upload [data-testid='file-upload'] {
-        min-height: 36px !important;
-        height: 36px !important;
-        padding: 2px 10px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 8px !important;
+    /* Make Gradio file upload dropzones more compact.
+       Gradio's internal DOM/classes vary by version/theme, so we target several.
+    */
+    .compact-upload {
+        --upload-h: 36px;
     }
 
-    /* Keep the dropzone text on one line */
-    .compact-upload [data-testid='file-upload'] * {
-        font-size: 0.95rem;
+    .compact-upload [data-testid='file-upload'],
+    .compact-upload .file-upload,
+    .compact-upload .upload-box,
+    .compact-upload .upload-container {
+        min-height: var(--upload-h) !important;
+        height: var(--upload-h) !important;
+        max-height: var(--upload-h) !important;
+        padding: 2px 10px !important;
+        overflow: hidden !important;
+    }
+
+    /* Keep the dropzone message on a single line (best-effort) */
+    .compact-upload [data-testid='file-upload'] *,
+    .compact-upload .file-upload *,
+    .compact-upload .upload-box *,
+    .compact-upload .upload-container * {
+        font-size: 0.92rem;
         line-height: 1.1;
         white-space: nowrap;
     }
 
-    /* Some Gradio themes wrap the message in a .wrap container */
-    .compact-upload .wrap {
-        min-height: 36px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 8px !important;
-        white-space: nowrap;
-    }
-
-    /* In case the message is split into multiple <p> tags, make them inline */
+    /* Avoid default paragraph margins causing extra height */
     .compact-upload p {
         margin: 0 !important;
-        display: inline !important;
+    }
+
+    /* Some themes use a .wrap container inside the dropzone */
+    .compact-upload .wrap {
+        min-height: var(--upload-h) !important;
+        height: var(--upload-h) !important;
+        max-height: var(--upload-h) !important;
+        overflow: hidden !important;
+        white-space: nowrap;
     }
     """
 
