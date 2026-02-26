@@ -18,6 +18,7 @@ def minutes_system_prompt() -> str:
 
             Here are the constraints:
             1. If you find sub-sections in the transcript, you should generate indented bullet points.
+               Bullet points should be only 2 level deep. After two levels, it should be paragraph text.
             2. If there is no substantive content in the transcript, output nothing (empty string).
             3. If there is no substantive content for this section, output nothing (empty string).
             4. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).

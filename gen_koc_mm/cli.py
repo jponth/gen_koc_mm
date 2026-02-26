@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from .chunking import chunk_utterances, identify_section_boundaries, section_is_absent
-from .llm import generate_minutes
+from .llm import generate_minutes, load_llm_config
 from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_marked_transcript
 from .prompting import minutes_system_prompt, minutes_user_prompt, validate_fewshot_config
 from .sections import SECTION_DEFS, SECTION_HEADINGS
@@ -70,7 +70,8 @@ def generate(
         "--date-of-meeting",
         help="Meeting date to embed in the JSON output. If omitted, we try to infer from the input filename (YYYY-MM-DD).",
     ),
-    model: str = typer.Option("gpt-4o-mini", "--model", help="OpenAI model name"),
+    provider: str = typer.Option("openai", "--provider", help="LLM provider (openai|ollama)"),
+    model: Optional[str] = typer.Option(None, "--model", help="Model name (provider-specific)"),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
 ):
     """Generate KoC meeting minutes.
@@ -121,7 +122,9 @@ def generate(
     chunks = parse_marked_transcript(raw)
 
     sys_p = minutes_system_prompt()
-    model_name = model
+
+    llm_cfg = load_llm_config(provider=provider, model=model)
+    model_name = llm_cfg.model
 
     heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
 
@@ -160,7 +163,12 @@ def generate(
         (logs_dir / f"{base}.system.txt").write_text(sys_p + "\n", encoding="utf-8")
         (logs_dir / f"{base}.user.txt").write_text(user_p + "\n", encoding="utf-8")
 
-        bullets_raw = generate_minutes(system_prompt=sys_p, user_prompt=user_p, model=model_name)
+        bullets_raw = generate_minutes(
+            system_prompt=sys_p,
+            user_prompt=user_p,
+            provider=provider,
+            model=model_name,
+        )
 
         # Log raw response.
         (logs_dir / f"{base}.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
@@ -185,6 +193,7 @@ def generate(
         "generator": {
             "name": "gen_koc_mm",
             "version": "0.1.0",
+            "provider": provider,
             "model": model_name,
         },
         "source": {

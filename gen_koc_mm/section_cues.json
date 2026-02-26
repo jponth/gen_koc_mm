@@ -3,10 +3,12 @@
     "\\bchaplain'?s\\s+report\\b"
   ],
   "grand_knights_report": [
+    "\\s*grand\\s+(?:knight|night)'?s\\s+report\\b",
     "\\b(?:start\\s+with|start\\s+by|we'?ll\\s+start\\s+with|i'?ll\\s+start\\s+with|move\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to)\\s+(?:the\\s+)?grand\\s+knight(?:s)?\\s+report\\b",
     "\\b(?:start\\s+with|start\\s+by|we'?ll\\s+start\\s+with|i'?ll\\s+start\\s+with|move\\s+on\\s+to|we'?ll\\s+move\\s+on\\s+to)\\s+(?:the\\s+)?grand\\s+knights\\s+report\\b",
     "\\bgrand\\s+knights\\s+report\\b",
-    "\\bgrand\\s+knight\\s+report\\b"
+    "\\bgrand\\s+knight\\s+report\\b",
+    "\\bgrand\\s+night\\s+report\\b"
   ],
   "treasurers_report": [
     "\\bgo\\s+ahead\\s+with\\s+the\\s+treasury\\s+report\\b",

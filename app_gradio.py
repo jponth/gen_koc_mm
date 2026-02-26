@@ -214,6 +214,7 @@ def ui_generate_json(
     marked_file,
     marked_path_text: str,
     date_of_meeting,
+    provider: str,
     model_override: str,
     debug_chunks: bool,
 ) -> Tuple[str, Optional[str], Optional[str]]:
@@ -258,6 +259,10 @@ def ui_generate_json(
 
     if date_str:
         args += ["--date-of-meeting", date_str]
+    prov = (provider or "OpenAI").strip().lower()
+    prov = "ollama" if "ollama" in prov else "openai"
+    args += ["--provider", prov]
+
     if model_override and model_override.strip():
         args += ["--model", model_override.strip()]
     if debug_chunks:
@@ -437,7 +442,12 @@ def build_ui() -> gr.Blocks:
                 )
 
                 with gr.Accordion("Advanced options", open=False):
-                    model_override = gr.Textbox(value="gpt-4o-mini", label="Model (OpenAI)")
+                    provider = gr.Dropdown(
+                        choices=["OpenAI", "Ollama Local"],
+                        value="OpenAI",
+                        label="LLM provider",
+                    )
+                    model_override = gr.Textbox(value="gpt-5-mini", label="Model")
                     debug_chunks = gr.Checkbox(value=False, label="Write debug chunks")
 
                 run_btn4 = gr.Button("Generate minutes JSON")
@@ -494,9 +504,16 @@ def build_ui() -> gr.Blocks:
                 outputs=[st_edited_marked_path, marked_path_echo4],
             )
 
+            # When switching providers, set a sensible default model.
+            provider.change(
+                lambda p: "gpt-4o-mini" if p == "OpenAI" else "gpt-oss:20b",
+                inputs=[provider],
+                outputs=[model_override],
+            )
+
             run_btn4.click(
                 ui_generate_json,
-                inputs=[marked_upload4, marked_path_echo4, date_of_meeting, model_override, debug_chunks],
+                inputs=[marked_upload4, marked_path_echo4, date_of_meeting, provider, model_override, debug_chunks],
                 outputs=[log4, json_preview, json_path],
             ).then(
                 lambda p: (p or "", p or ""),
