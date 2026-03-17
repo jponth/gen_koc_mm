@@ -44,23 +44,52 @@ brew install openai-whisper
 whisper --help
 ```
 
-## Configure OpenAI
+## Configure LLM (OpenAI or Ollama)
 
-Option A (recommended): create a `.env` file:
+The generator supports two LLM backends:
+- **OpenAI** (cloud): `--provider openai` (default)
+- **Ollama** (local, OpenAI-compatible): `--provider ollama`
+
+### Option A (recommended): `.env` file
+
+#### OpenAI
 
 ```bash
 cat > .env << 'EOF'
 OPENAI_API_KEY=YOUR_KEY_HERE
-# optional default model:
-OPENAI_MODEL=gpt-4o-mini
+# optional default model (if omitted, defaults to gpt-5-mini)
+OPENAI_MODEL=gpt-5-mini
 EOF
 ```
 
-Option B: export env vars in your shell:
+#### Ollama (local)
+
+```bash
+cat > .env << 'EOF'
+# Ollama uses an OpenAI-compatible endpoint
+OLLAMA_BASE_URL=http://localhost:11434/v1
+# optional; the OpenAI client requires a string, even if the server ignores it
+OLLAMA_API_KEY=ollama
+# optional default model (if omitted, defaults to gpt-oss:20b)
+OLLAMA_MODEL=gpt-oss:20b
+EOF
+```
+
+### Option B: export env vars in your shell
+
+#### OpenAI
 
 ```bash
 export OPENAI_API_KEY=YOUR_KEY_HERE
-export OPENAI_MODEL=gpt-4o-mini
+export OPENAI_MODEL=gpt-5-mini
+```
+
+#### Ollama
+
+```bash
+export OLLAMA_BASE_URL=http://localhost:11434/v1
+export OLLAMA_API_KEY=ollama
+export OLLAMA_MODEL=gpt-oss:20b
 ```
 
 ## UI (Gradio)
@@ -121,7 +150,8 @@ Options:
 - `--identify-sections` — phase 1 (creates a marked transcript)
 - `--generate-output` — phase 2 (creates minutes JSON)
 - `--date-of-meeting TEXT` — set JSON field `date_of_meeting` (best-effort inferred from filename if omitted)
-- `--model TEXT` — override model name (otherwise uses `OPENAI_MODEL`, default `gpt-4o-mini`)
+- `--provider TEXT` — LLM provider (`openai` or `ollama`)
+- `--model TEXT` — override model name (otherwise uses `OPENAI_MODEL` or `OLLAMA_MODEL`; defaults: `gpt-5-mini` for OpenAI, `gpt-oss:20b` for Ollama)
 - `--debug-chunks` — when generating output, write per-section transcript chunks next to the output for inspection
 
 #### Phase 1 example: identify section boundaries
@@ -148,6 +178,17 @@ python -m gen_koc_mm generate \
   --output output/minutes.json \
   --date-of-meeting 2026-02-23 \
   --debug-chunks
+```
+
+#### Using Ollama (local) instead of OpenAI
+
+```bash
+python -m gen_koc_mm generate \
+  --provider ollama \
+  --model gpt-oss:20b \
+  --generate-output \
+  --input output/marked_transcript.txt \
+  --output output/minutes.json
 ```
 
 The JSON schema (v1.0) looks like:
