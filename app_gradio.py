@@ -202,35 +202,48 @@ def _extract_boundary_index(marked_text: str) -> str:
 
     pat = re.compile(r"^\s*\*\*\s*(?P<tag>[^*]+?)\s*\*\*\s*$")
 
-    counts: dict[str, int] = {k: 0 for k in known_tags}
+    # Map: boundary tag -> 1-indexed line numbers where it appears.
+    found_lines: dict[str, list[int]] = {k: [] for k in known_tags}
 
-    for ln in marked_text.splitlines():
+    for i, ln in enumerate(marked_text.splitlines(), start=1):
         m = pat.match(ln)
         if not m:
             continue
         tag = m.group("tag").strip()
-        counts[tag] = counts.get(tag, 0) + 1
+        found_lines.setdefault(tag, []).append(i)
 
-    if not counts:
+    if not found_lines:
         return "(No known boundary tags available to count.)"
 
     lines: list[str] = ["**Boundary counts (all sections)**", ""]
 
+    def _fmt_line_numbers(nums: list[int]) -> str:
+        if not nums:
+            return ""
+        if len(nums) <= 12:
+            return " (lines: " + ", ".join(map(str, nums)) + ")"
+        # Avoid dumping huge lists in the UI.
+        head = ", ".join(map(str, nums[:10]))
+        return f" (lines: {head}, … +{len(nums) - 10} more)"
+
     for k in known_tags:
-        n = counts.get(k, 0)
+        nums = found_lines.get(k, [])
+        n = len(nums)
+        suffix = _fmt_line_numbers(nums)
         if n == 0:
             lines.append(f"- `** {k} **`: **0** — **MISSING**")
         elif n > 1:
-            lines.append(f"- `** {k} **`: **{n}** — **DUPLICATE**")
+            lines.append(f"- `** {k} **`: **{n}**{suffix} — **DUPLICATE**")
         else:
-            lines.append(f"- `** {k} **`: {n}")
+            lines.append(f"- `** {k} **`: {n}{suffix}")
 
     # Also show any unknown tags that appear in the text (typos / non-canonical).
-    extras = sorted([k for k in counts.keys() if k not in set(known_tags)])
+    extras = sorted([k for k in found_lines.keys() if k not in set(known_tags)])
     if extras:
         lines += ["", "**Non-canonical boundary tags found (check for typos)**", ""]
         for k in extras:
-            lines.append(f"- `** {k} **`: **{counts.get(k, 0)}**")
+            nums = found_lines.get(k, [])
+            lines.append(f"- `** {k} **`: **{len(nums)}**{_fmt_line_numbers(nums)}")
 
     return "\n".join(lines)
 
@@ -490,6 +503,7 @@ def build_ui() -> gr.Blocks:
                             language="markdown",
                             lines=22,
                             show_line_numbers=True,
+                            wrap_lines=True,
                         )
 
                 with gr.Row():
