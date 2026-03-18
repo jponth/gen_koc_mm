@@ -175,6 +175,65 @@ def ui_identify_sections(transcript_file, transcript_path_text: str) -> Tuple[st
 # Tab 3: Edit boundaries (Save As)
 # -------------------------
 
+
+def _extract_boundary_index(marked_text: str) -> str:
+    """Show boundary counts for all sections (single list).
+
+    Flags:
+    - **MISSING** when count == 0
+    - **DUPLICATE** when count > 1
+
+    Boundary markers are standalone lines like:
+      ** old_business **
+    """
+
+    if not marked_text or not marked_text.strip():
+        return "(No transcript loaded.)"
+
+    import re
+
+    # Canonical list of boundary keys from the generator (keeps UI in sync with CLI behavior).
+    try:
+        from gen_koc_mm.sections import SECTION_DEFS
+
+        known_tags = [s.key for s in SECTION_DEFS]
+    except Exception:
+        known_tags = []
+
+    pat = re.compile(r"^\s*\*\*\s*(?P<tag>[^*]+?)\s*\*\*\s*$")
+
+    counts: dict[str, int] = {k: 0 for k in known_tags}
+
+    for ln in marked_text.splitlines():
+        m = pat.match(ln)
+        if not m:
+            continue
+        tag = m.group("tag").strip()
+        counts[tag] = counts.get(tag, 0) + 1
+
+    if not counts:
+        return "(No known boundary tags available to count.)"
+
+    lines: list[str] = ["**Boundary counts (all sections)**", ""]
+
+    for k in known_tags:
+        n = counts.get(k, 0)
+        if n == 0:
+            lines.append(f"- `** {k} **`: **0** — **MISSING**")
+        elif n > 1:
+            lines.append(f"- `** {k} **`: **{n}** — **DUPLICATE**")
+        else:
+            lines.append(f"- `** {k} **`: {n}")
+
+    # Also show any unknown tags that appear in the text (typos / non-canonical).
+    extras = sorted([k for k in counts.keys() if k not in set(known_tags)])
+    if extras:
+        lines += ["", "**Non-canonical boundary tags found (check for typos)**", ""]
+        for k in extras:
+            lines.append(f"- `** {k} **`: **{counts.get(k, 0)}**")
+
+    return "\n".join(lines)
+
 def ui_load_marked(marked_file, marked_path_text: str) -> Tuple[str, Optional[str], Optional[str]]:
     """Load marked transcript into editor. Returns (status, content, loaded_path)."""
     src_path: Optional[Path] = None
@@ -420,7 +479,18 @@ def build_ui() -> gr.Blocks:
                 marked_path_echo = gr.Textbox(label="Or use marked transcript from Tab 2 (path)", interactive=False)
                 load_btn = gr.Button("Load into editor")
                 status3 = gr.Textbox(label="Status", lines=2)
-                editor = gr.Textbox(label="Marked transcript editor", lines=22)
+
+                with gr.Row():
+                    with gr.Column(scale=1, min_width=260):
+                        boundary_index = gr.Markdown(value="(Load a marked transcript to see boundaries.)")
+                        refresh_bounds_btn = gr.Button("Refresh boundary counts")
+                    with gr.Column(scale=3):
+                        editor = gr.Code(
+                            label="Marked transcript editor",
+                            language="markdown",
+                            lines=22,
+                            show_line_numbers=True,
+                        )
 
                 with gr.Row():
                     save_base = gr.Textbox(value="marked_edited", label="Save As base name")
@@ -492,6 +562,24 @@ def build_ui() -> gr.Blocks:
                 ui_load_marked,
                 inputs=[marked_upload, marked_path_echo],
                 outputs=[status3, editor, marked_path_echo],
+            ).then(
+                _extract_boundary_index,
+                inputs=[editor],
+                outputs=[boundary_index],
+            )
+
+            # Keep the boundary index live as the transcript is edited.
+            editor.change(
+                _extract_boundary_index,
+                inputs=[editor],
+                outputs=[boundary_index],
+            )
+
+            # Manual refresh button (in case the live-update misses an event).
+            refresh_bounds_btn.click(
+                _extract_boundary_index,
+                inputs=[editor],
+                outputs=[boundary_index],
             )
 
             save_btn.click(
