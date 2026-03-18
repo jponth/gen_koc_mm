@@ -12,8 +12,7 @@ from .sections import SECTION_DEFS, SECTION_HEADINGS
 
 
 def minutes_system_prompt() -> str:
-    return (
-        """
+    system_prompt = """
             You are an AI Assistant that can generate minutes of a meeting, in Markdown format.
 
             Here are the constraints:
@@ -29,7 +28,9 @@ def minutes_system_prompt() -> str:
             9. If there is no substantive content in the transcript, output nothing (empty string). 
             10. If there is no substantive content for this section, output nothing (empty string).
         """
-    )
+    #print(f"system_prompt: {system_prompt}")
+
+    return system_prompt
 
 
 @dataclass(frozen=True)
@@ -275,22 +276,26 @@ def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str
     fewshot = _get_fewshot_config()
     fewshot_block = _render_fewshot_block(examples=fewshot.examples, target_section_key=target_key)
 
-    return f"""
-Generate meeting minutes of the transcription of a meeting, in Markdown format.
+    user_prompt = f"""
+        Generate meeting minutes of the transcription of a meeting, in Markdown format.
 
-Constraints:
-- Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-- Do NOT include any timestamps anywhere.
-- Do NOT add any header block.
-- Output MUST be valid Markdown.
-- Output MUST be ONLY bullet points (each line starts with '- ').
-- If you find sub-sections in the transcript, you should generate indented bullet points.
-- If there is no substantive content in the transcript, output nothing (empty string).
+        Constraints:
+        - Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+        - Do NOT include any timestamps anywhere.
+        - Do NOT add any header block.
+        - Output MUST be valid Markdown.
+        - Output MUST be ONLY bullet points (each line starts with '- ').
+        - If you find sub-sections in the transcript, you should generate indented bullet points.
+        - If there is no substantive content in the transcript, output nothing (empty string).
 
-Here are a few examples of transcripts and the corresponding expected output (bullet points):
+        Here are a few examples of transcripts and the corresponding expected output (bullet points):
 
-{fewshot_block}
+        {fewshot_block}
 
-Now, using the style and length demonstrated above, generate extractive summarization of the following transcript: 
-{section_transcript}
-""".strip()
+        Now, using the style and length demonstrated above, generate extractive summarization of the following transcript: 
+        {section_transcript}
+        """.strip()
+
+    #print(f"user_prompt: {user_prompt}")
+
+    return user_prompt

@@ -9,18 +9,7 @@ Generate Knights of Columbus (KoC) council meeting minutes (JSON) from a **trans
 - Produces minutes as **JSON** (no timestamps, no header block).
 
 ## Output template
-The generator outputs these section headings (in order), as bold lines:
-- Chaplain’s Report
-- Grand Knights Report
-- Treasurer’s Report
-- Insurance Agent Report
-- District Deputy Report
-- 4th Degree Report
-- Old Business
-- New Business
-- Birthdays
-- Good of the Order
-- Closing prayers
+The generator outputs based on the identified sections in the transcript, based on the '** section_boundary **'
 
 If a section has no content (or the transcript indicates the person is not present), it is left empty.
 

@@ -204,7 +204,7 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
-        ph = f"<<{key}>>"
+        ph = f"(***{key}***)"
         for p in _iter_all_paragraphs(doc):
             if _replace_placeholder_in_paragraph(p, ph, txt, bullet_style=bullet_style):
                 replaced.append(ph)
