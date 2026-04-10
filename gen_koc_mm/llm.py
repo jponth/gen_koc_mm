@@ -44,7 +44,7 @@ def load_llm_config(*, provider: str = "openai", model: Optional[str] = None) ->
     return LLMConfig(provider="ollama", api_key=api_key, model=m, base_url=base_url)
 
 
-def generate_minutes(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
+def _chat_completion(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
     cfg = load_llm_config(provider=provider, model=model)
 
     if cfg.provider == "ollama":
@@ -58,6 +58,16 @@ def generate_minutes(*, system_prompt: str, user_prompt: str, provider: str, mod
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        #,temperature=0.2,
+        # ,temperature=0.2,
     )
     return (resp.choices[0].message.content or "").strip() + "\n"
+
+
+def generate_minutes(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
+    """Generate bullet-style minutes from a prompt + transcript."""
+    return _chat_completion(system_prompt=system_prompt, user_prompt=user_prompt, provider=provider, model=model)
+
+
+def bullets_to_paragraphs(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
+    """Rewrite a bullet list into concise, well-structured paragraphs."""
+    return _chat_completion(system_prompt=system_prompt, user_prompt=user_prompt, provider=provider, model=model)

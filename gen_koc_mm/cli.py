@@ -12,9 +12,15 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from .chunking import chunk_utterances, identify_section_boundaries, section_is_absent
-from .llm import generate_minutes, load_llm_config
+from .llm import bullets_to_paragraphs, generate_minutes, load_llm_config
 from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_marked_transcript
-from .prompting import minutes_system_prompt, minutes_user_prompt, validate_fewshot_config
+from .prompting import (
+    minutes_system_prompt,
+    minutes_user_prompt,
+    paragraphs_system_prompt,
+    paragraphs_user_prompt,
+    validate_fewshot_config,
+)
 from .sections import SECTION_DEFS, SECTION_HEADINGS
 from .transcript import parse_transcript
 from .docx_merge import merge_minutes_into_docx
@@ -73,6 +79,11 @@ def generate(
     provider: str = typer.Option("openai", "--provider", help="LLM provider (openai|ollama)"),
     model: Optional[str] = typer.Option(None, "--model", help="Model name (provider-specific)"),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
+    minutes_style: str = typer.Option(
+        "paragraphs",
+        "--minutes-style",
+        help="Final minutes style: paragraphs (default) or bullets",
+    ),
 ):
     """Generate KoC meeting minutes.
 
@@ -121,14 +132,19 @@ def generate(
 
     chunks = parse_marked_transcript(raw)
 
-    sys_p = minutes_system_prompt()
-
     llm_cfg = load_llm_config(provider=provider, model=model)
     model_name = llm_cfg.model
 
     heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
 
-    section_to_bullets: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
+    minutes_style_norm = (minutes_style or "bullets").strip().lower()
+    if minutes_style_norm not in ("bullets", "paragraphs"):
+        raise typer.BadParameter("--minutes-style must be one of: bullets, paragraphs")
+
+    sys_p = minutes_system_prompt()
+    para_sys_p = paragraphs_system_prompt() if minutes_style_norm == "paragraphs" else ""
+
+    section_to_text: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
 
     # Optional: write chunks for inspection
     if debug_chunks:
@@ -151,7 +167,7 @@ def generate(
     for idx, ch in enumerate(chunks, start=1):
         # If section is empty, or the transcript explicitly says the person isn't present, leave it empty.
         if section_is_absent(ch):
-            section_to_bullets[ch.heading] = ""
+            section_to_text[ch.heading] = ""
             continue
 
         user_p = minutes_user_prompt(section_heading=ch.heading, section_transcript=ch.text)
@@ -170,11 +186,29 @@ def generate(
             model=model_name,
         )
 
-        # Log raw response.
-        (logs_dir / f"{base}.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
+        # Log raw bullet response.
+        (logs_dir / f"{base}.bullets.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
 
         bullets = "\n".join([ln for ln in bullets_raw.splitlines() if ln.strip().startswith("-")]).strip()
-        section_to_bullets[ch.heading] = bullets
+
+        if minutes_style_norm == "paragraphs" and bullets.strip():
+            para_user_p = paragraphs_user_prompt(section_heading=ch.heading, bullets_markdown=bullets)
+
+            # Log paragraph rewrite prompts.
+            (logs_dir / f"{base}.paragraphs.system.txt").write_text(para_sys_p + "\n", encoding="utf-8")
+            (logs_dir / f"{base}.paragraphs.user.txt").write_text(para_user_p + "\n", encoding="utf-8")
+
+            paragraphs_raw = bullets_to_paragraphs(
+                system_prompt=para_sys_p,
+                user_prompt=para_user_p,
+                provider=provider,
+                model=model_name,
+            )
+
+            (logs_dir / f"{base}.paragraphs.response.txt").write_text(paragraphs_raw + "\n", encoding="utf-8")
+            section_to_text[ch.heading] = (paragraphs_raw or "").strip()
+        else:
+            section_to_text[ch.heading] = bullets
 
     # Build JSON payload (schema v1.0)
     date_str = _infer_date_of_meeting(input_path=input, explicit=date_of_meeting)
@@ -184,7 +218,7 @@ def generate(
         if section_is_absent(ch):
             section_status[ch.heading] = "absent"
         else:
-            txt = (section_to_bullets.get(ch.heading) or "").strip()
+            txt = (section_to_text.get(ch.heading) or "").strip()
             section_status[ch.heading] = "ok" if txt else "empty"
 
     payload = {
@@ -203,7 +237,7 @@ def generate(
             {
                 "section_key": heading_to_key.get(heading, heading.lower()),
                 "section_heading": heading,
-                "section_text": (section_to_bullets.get(heading) or "").strip(),
+                "section_text": (section_to_text.get(heading) or "").strip(),
                 "format": "markdown",
                 "status": section_status.get(heading, "empty"),
             }

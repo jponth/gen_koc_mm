@@ -258,6 +258,46 @@ def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key:
     return "\n".join(blocks).rstrip() + "\n\n"
 
 
+def paragraphs_system_prompt() -> str:
+    system_prompt = """
+            You are an AI Assistant that converts meeting-minutes bullet lists into well-structured paragraphs in Markdown.
+
+            Requirements:
+            1. Combine related bullet points into coherent paragraphs based on topic or theme.
+            2. Preserve ALL original information—do not omit, summarize away, or add new details.
+            3. Maintain the original meaning and level of specificity.
+            4. Use clear transitions so each paragraph reads naturally.
+            5. Do NOT include bullet points in the output.
+            6. If a bullet contains multiple ideas, ensure each idea is still represented in the paragraph.
+            7. Maintain any important terminology, names, numbers, or technical details exactly as given.
+            8. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+            9. Do NOT include any timestamps anywhere.
+            10. Do NOT add any header block.
+            11. Output MUST be valid Markdown.
+            12. Output MUST be ONLY paragraph text (no bullet lines starting with '- ').
+            13. If the bullet input is empty or has no substantive content, output nothing (empty string).
+        """
+    return system_prompt
+
+
+def paragraphs_user_prompt(*, section_heading: str, bullets_markdown: str) -> str:
+    bullets_markdown = (bullets_markdown or "").strip()
+
+    user_prompt = f"""
+        Convert the following bullet list for the section '{section_heading}' into a set of concise, well-structured paragraphs.
+
+        Requirements:
+        - Output only paragraphs in Markdown (no bullets).
+        - Keep it faithful to the bullets; do not add new facts.
+        - If the input is empty, output an empty string.
+
+        Bullet input:
+        {bullets_markdown}
+        """.strip()
+
+    return user_prompt
+
+
 def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str:
     """Prompt for a single section.
 
