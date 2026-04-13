@@ -64,10 +64,10 @@ def _chat_completion(*, system_prompt: str, user_prompt: str, provider: str, mod
 
 
 def generate_minutes(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
-    """Generate bullet-style minutes from a prompt + transcript."""
+    """Generate an extractive section summary from a transcript prompt."""
     return _chat_completion(system_prompt=system_prompt, user_prompt=user_prompt, provider=provider, model=model)
 
 
-def bullets_to_paragraphs(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
-    """Rewrite a bullet list into concise, well-structured paragraphs."""
+def format_minutes_bullets(*, system_prompt: str, user_prompt: str, provider: str, model: str) -> str:
+    """Format an extractive section summary into final Markdown bullet minutes."""
     return _chat_completion(system_prompt=system_prompt, user_prompt=user_prompt, provider=provider, model=model)

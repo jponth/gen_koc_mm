@@ -142,7 +142,7 @@ Options:
 - `--provider TEXT` — LLM provider (`openai` or `ollama`)
 - `--model TEXT` — override model name (otherwise uses `OPENAI_MODEL` or `OLLAMA_MODEL`; defaults: `gpt-5-mini` for OpenAI, `gpt-oss:20b` for Ollama)
 - `--debug-chunks` — when generating output, write per-section transcript chunks next to the output for inspection
-- `--minutes-style bullets|paragraphs` — final minutes style (default: paragraphs). `paragraphs` rewrites the generated bullets into concise, well-structured paragraphs.
+- `--minutes-style bullets` — final minutes style. Currently only `bullets` is supported.
 
 #### Phase 1 example: identify section boundaries
 

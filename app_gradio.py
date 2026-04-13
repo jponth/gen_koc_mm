@@ -580,6 +580,10 @@ def build_ui() -> gr.Blocks:
                 _extract_boundary_index,
                 inputs=[editor],
                 outputs=[boundary_index],
+            ).then(
+                lambda p: p or "",
+                inputs=[marked_path_echo],
+                outputs=[marked_path_echo4],
             )
 
             # Keep the boundary index live as the transcript is edited.

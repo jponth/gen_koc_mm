@@ -13,22 +13,18 @@ from .sections import SECTION_DEFS, SECTION_HEADINGS
 
 def minutes_system_prompt() -> str:
     system_prompt = """
-            You are an AI Assistant that can generate minutes of a meeting, in Markdown format.
+            You are an AI Assistant that performs extractive summarization for a single meeting section.
 
-            Here are the constraints:
-            1. If you find sub-sections in the transcript, you should generate indented bullet points.
-               Bullet points should be only 2 level deep. After two levels, it should be paragraph text.
-            2. If there is no substantive content in the transcript, output nothing (empty string).
-            3. If there is no substantive content for this section, output nothing (empty string).
-            4. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-            5. Do NOT include any timestamps anywhere.
-            6. Do NOT add any header block.
-            7. Output MUST be valid Markdown.
-            8. Output MUST be ONLY bullet points (each line starts with '- ').
-            9. If there is no substantive content in the transcript, output nothing (empty string). 
-            10. If there is no substantive content for this section, output nothing (empty string).
+            Requirements:
+            1. Perform extractive summarization only. Keep the output tightly grounded in the transcript.
+            2. Do not add facts, decisions, names, dates, amounts, or actions that are not supported by the transcript.
+            3. Do not format the output as Markdown, bullets, headings, or sections.
+            4. Output plain text only.
+            5. Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
+            6. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+            7. Do NOT include any timestamps anywhere.
+            8. If there is no substantive content for this section, output nothing (empty string).
         """
-    #print(f"system_prompt: {system_prompt}")
 
     return system_prompt
 
@@ -245,54 +241,58 @@ def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key:
     if not picked:
         return ""
 
-    blocks: list[str] = ["Few-shot examples (raw transcript -> expected bullet output):"]
+    blocks: list[str] = ["Few-shot examples (raw transcript -> extractive plain-text summary):"]
     for i, ex in enumerate(picked, start=1):
         blocks.append(f"Example {i}: {ex.title}")
         blocks.append(f"Applies to section_key: {ex.section_key}")
         blocks.append("Transcript:")
         blocks.append(ex.transcript)
-        blocks.append("Expected output (ONLY bullets):")
+        blocks.append("Expected output:")
         blocks.append(ex.expected_bullets.rstrip("\n"))
         blocks.append("")
 
     return "\n".join(blocks).rstrip() + "\n\n"
 
 
-def paragraphs_system_prompt() -> str:
+def format_minutes_system_prompt() -> str:
     system_prompt = """
-            You are an AI Assistant that converts meeting-minutes bullet lists into well-structured paragraphs in Markdown.
+            You are an AI Assistant that formats an extractive section summary into final meeting minutes in Markdown.
 
             Requirements:
-            1. Combine related bullet points into coherent paragraphs based on topic or theme.
-            2. Preserve ALL original information—do not omit, summarize away, or add new details.
-            3. Maintain the original meaning and level of specificity.
-            4. Use clear transitions so each paragraph reads naturally.
-            5. Do NOT include bullet points in the output.
-            6. If a bullet contains multiple ideas, ensure each idea is still represented in the paragraph.
-            7. Maintain any important terminology, names, numbers, or technical details exactly as given.
-            8. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-            9. Do NOT include any timestamps anywhere.
-            10. Do NOT add any header block.
-            11. Output MUST be valid Markdown.
-            12. Output MUST be ONLY paragraph text (no bullet lines starting with '- ').
-            13. If the bullet input is empty or has no substantive content, output nothing (empty string).
+            1. Preserve all information from the input summary. Do not add new facts and do not omit supported details.
+            2. Format the output as Markdown.
+            3. When the context changes to a new sub-topic, group related items into nested bullet lists.
+            4. Each top-level bullet line must start with '- '. Nested bullets may be used for grouped sub-sections.
+            5. Keep bullet nesting to at most 2 levels deep.
+            6. Maintain the original meaning, order, specificity, terminology, and numbers from the input summary.
+            7. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+            8. Do NOT include any timestamps anywhere.
+            9. Do NOT add any header block.
+            10. Output MUST be only Markdown bullet lists, with nested bullets when helpful.
+            11. If the input is empty or has no substantive content, output nothing (empty string).
         """
     return system_prompt
 
 
-def paragraphs_user_prompt(*, section_heading: str, bullets_markdown: str) -> str:
-    bullets_markdown = (bullets_markdown or "").strip()
+def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> str:
+    summary_text = (summary_text or "").strip()
 
     user_prompt = f"""
-        Convert the following bullet list for the section '{section_heading}' into a set of concise, well-structured paragraphs.
+        You are formatting the final minutes for the section '{section_heading}'.
 
-        Requirements:
-        - Output only paragraphs in Markdown (no bullets).
-        - Keep it faithful to the bullets; do not add new facts.
+        Task:
+        1. Convert the input summary into final Markdown bullet-list minutes.
+        2. Group related items into nested bullet sub-sections when the context clearly changes.
+
+        Constraints:
+        - Preserve all supported information from the input.
+        - Do not add new facts, decisions, names, dates, amounts, or action items.
+        - Output only Markdown bullet lists.
+        - Use nested bullets only when they help group related content under a clear context change.
         - If the input is empty, output an empty string.
 
-        Bullet input:
-        {bullets_markdown}
+        Input summary:
+        {summary_text}
         """.strip()
 
     return user_prompt
@@ -308,34 +308,40 @@ def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str
       - plus examples where section_key matches the target section key
     """
 
-    headings = "\n".join(SECTION_HEADINGS)
-
     heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
     target_key = heading_to_key.get(_norm_key(section_heading), "")
 
     fewshot = _get_fewshot_config()
     fewshot_block = _render_fewshot_block(examples=fewshot.examples, target_section_key=target_key)
 
-    user_prompt = f"""
-        Generate meeting minutes of the transcription of a meeting, in Markdown format.
-
-        Constraints:
-        - Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-        - Do NOT include any timestamps anywhere.
-        - Do NOT add any header block.
-        - Output MUST be valid Markdown.
-        - Output MUST be ONLY bullet points (each line starts with '- ').
-        - If you find sub-sections in the transcript, you should generate indented bullet points.
-        - If there is no substantive content in the transcript, output nothing (empty string).
-
-        Here are a few examples of transcripts and the corresponding expected output (bullet points):
+    examples_block = ""
+    if fewshot_block.strip():
+        examples_block = f"""
+        Here are a few examples of transcripts and the corresponding expected extractive summaries:
 
         {fewshot_block}
+        """
 
-        Now, using the style and length demonstrated above, generate extractive summarization of the following transcript: 
+    user_prompt = f"""
+        You are generating an extractive summary for the meeting section: '{section_heading}'.
+
+        Task:
+        1. Perform extractive summarization of this section only.
+        2. Capture the substantive information in plain text without applying final formatting.
+
+        Constraints:
+        - Keep the output tightly grounded in the transcript.
+        - Do not add new facts, decisions, names, dates, amounts, or action items that are not supported by the transcript.
+        - Do not format the output as Markdown, bullets, headings, or sections.
+        - Output plain text only.
+        - Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
+        - Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+        - Do NOT include any timestamps anywhere.
+        - If there is no substantive content in this section, output an empty string.
+
+        {examples_block}
+        Transcript for this section:
         {section_transcript}
         """.strip()
-
-    #print(f"user_prompt: {user_prompt}")
 
     return user_prompt

@@ -12,13 +12,13 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from .chunking import chunk_utterances, identify_section_boundaries, section_is_absent
-from .llm import bullets_to_paragraphs, generate_minutes, load_llm_config
+from .llm import format_minutes_bullets, generate_minutes, load_llm_config
 from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_marked_transcript
 from .prompting import (
+    format_minutes_system_prompt,
+    format_minutes_user_prompt,
     minutes_system_prompt,
     minutes_user_prompt,
-    paragraphs_system_prompt,
-    paragraphs_user_prompt,
     validate_fewshot_config,
 )
 from .sections import SECTION_DEFS, SECTION_HEADINGS
@@ -80,9 +80,9 @@ def generate(
     model: Optional[str] = typer.Option(None, "--model", help="Model name (provider-specific)"),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
     minutes_style: str = typer.Option(
-        "paragraphs",
+        "bullets",
         "--minutes-style",
-        help="Final minutes style: paragraphs (default) or bullets",
+        help="Final minutes style. Currently only 'bullets' is supported.",
     ),
 ):
     """Generate KoC meeting minutes.
@@ -138,11 +138,11 @@ def generate(
     heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
 
     minutes_style_norm = (minutes_style or "bullets").strip().lower()
-    if minutes_style_norm not in ("bullets", "paragraphs"):
-        raise typer.BadParameter("--minutes-style must be one of: bullets, paragraphs")
+    if minutes_style_norm != "bullets":
+        raise typer.BadParameter("--minutes-style currently supports only: bullets")
 
     sys_p = minutes_system_prompt()
-    para_sys_p = paragraphs_system_prompt() if minutes_style_norm == "paragraphs" else ""
+    format_sys_p = format_minutes_system_prompt()
 
     section_to_text: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
 
@@ -186,29 +186,33 @@ def generate(
             model=model_name,
         )
 
-        # Log raw bullet response.
-        (logs_dir / f"{base}.bullets.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
+        # Log raw extractive summary response.
+        (logs_dir / f"{base}.summary.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
 
-        bullets = "\n".join([ln for ln in bullets_raw.splitlines() if ln.strip().startswith("-")]).strip()
+        summary_text = (bullets_raw or "").strip()
 
-        if minutes_style_norm == "paragraphs" and bullets.strip():
-            para_user_p = paragraphs_user_prompt(section_heading=ch.heading, bullets_markdown=bullets)
+        if not summary_text:
+            section_to_text[ch.heading] = ""
+            continue
 
-            # Log paragraph rewrite prompts.
-            (logs_dir / f"{base}.paragraphs.system.txt").write_text(para_sys_p + "\n", encoding="utf-8")
-            (logs_dir / f"{base}.paragraphs.user.txt").write_text(para_user_p + "\n", encoding="utf-8")
+        format_user_p = format_minutes_user_prompt(section_heading=ch.heading, summary_text=summary_text)
 
-            paragraphs_raw = bullets_to_paragraphs(
-                system_prompt=para_sys_p,
-                user_prompt=para_user_p,
-                provider=provider,
-                model=model_name,
-            )
+        # Log final formatting prompts.
+        (logs_dir / f"{base}.formatting.system.txt").write_text(format_sys_p + "\n", encoding="utf-8")
+        (logs_dir / f"{base}.formatting.user.txt").write_text(format_user_p + "\n", encoding="utf-8")
 
-            (logs_dir / f"{base}.paragraphs.response.txt").write_text(paragraphs_raw + "\n", encoding="utf-8")
-            section_to_text[ch.heading] = (paragraphs_raw or "").strip()
-        else:
-            section_to_text[ch.heading] = bullets
+        formatted_raw = format_minutes_bullets(
+            system_prompt=format_sys_p,
+            user_prompt=format_user_p,
+            provider=provider,
+            model=model_name,
+        )
+
+        (logs_dir / f"{base}.formatting.response.txt").write_text(formatted_raw + "\n", encoding="utf-8")
+        formatted_text = (formatted_raw or "").strip()
+
+        bullets = "\n".join([ln for ln in formatted_text.splitlines() if ln.strip().startswith("-")]).strip()
+        section_to_text[ch.heading] = bullets
 
     # Build JSON payload (schema v1.0)
     date_str = _infer_date_of_meeting(input_path=input, explicit=date_of_meeting)
