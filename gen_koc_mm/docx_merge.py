@@ -56,6 +56,7 @@ def _replace_placeholder_in_paragraph(
     replacement: str,
     *,
     bullet_style: str | None = None,
+    nested_bullet_style: str | None = None,
 ) -> bool:
     """Replace placeholder in a paragraph.
 
@@ -88,24 +89,43 @@ def _replace_placeholder_in_paragraph(
                     first = False
                     continue
 
+                leading_spaces = len(stripped) - len(stripped.lstrip(" "))
+                level = 2 if leading_spaces >= 2 else 1
                 is_bullet = stripped.lstrip().startswith("- ")
                 text = stripped.lstrip()[2:] if is_bullet else stripped
-                if is_bullet and bullet_style:
-                    style = bullet_style
-                elif is_bullet:
-                    # Fallback: insert a literal bullet if the template has no bullet styles.
-                    style = "Normal"
-                    text = f"• {text}" if text else "•"
+                if is_bullet:
+                    if level == 1:
+                        # Treat first-level bullets as subsection headings: italic, no bullet.
+                        style = "Normal"
+                    else:
+                        bullet_prefix = "• "
+                        text = f"{bullet_prefix}{text}" if text else bullet_prefix.strip()
+                        if nested_bullet_style:
+                            style = nested_bullet_style
+                        elif bullet_style:
+                            style = bullet_style
+                        else:
+                            style = "Normal"
                 else:
                     style = "Normal"
 
                 if first:
                     _clear_paragraph(cur)
                     cur.style = style
-                    cur.add_run(text)
+                    run = cur.add_run(text)
+                    if is_bullet and level == 1:
+                        run.italic = True
+                    elif is_bullet and level >= 2 and not nested_bullet_style and not bullet_style:
+                        cur.paragraph_format.left_indent = 457200  # 0.5 inch
                     first = False
                 else:
-                    cur = _insert_paragraph_after(cur, text=text, style=style)
+                    cur = _insert_paragraph_after(cur, style=style)
+                    run = cur.add_run(text)
+                    if is_bullet and level == 1:
+                        run.italic = True
+                    elif is_bullet and level >= 2 and not nested_bullet_style and not bullet_style:
+                        # Fallback indentation when no list styles exist in the template.
+                        cur.paragraph_format.left_indent = 457200  # 0.5 inch
 
             return True
 
@@ -142,10 +162,12 @@ def _iter_all_paragraphs(doc: Document):
                     yield p
 
 
-def _pick_bullet_style_name(doc: Document) -> str | None:
+def _pick_bullet_style_names(doc: Document) -> tuple[str | None, str | None]:
     # Different templates can have different style sets.
-    # Try a few common bullet paragraph styles.
-    candidates = [
+    # Try a few common bullet paragraph styles for level 1 and level 2.
+    available = {s.name for s in doc.styles}
+
+    level1_candidates = [
         "List Bullet",
         "ListBullet",
         "Bullet List",
@@ -153,11 +175,18 @@ def _pick_bullet_style_name(doc: Document) -> str | None:
         "List Paragraph",
         "ListParagraph",
     ]
-    available = {s.name for s in doc.styles}
-    for c in candidates:
-        if c in available:
-            return c
-    return None
+    level2_candidates = [
+        "List Bullet 2",
+        "ListBullet2",
+        "Bullet List 2",
+        "Bulleted List 2",
+        "List Paragraph 2",
+        "ListParagraph2",
+    ]
+
+    level1 = next((c for c in level1_candidates if c in available), None)
+    level2 = next((c for c in level2_candidates if c in available), None)
+    return level1, level2
 
 
 def _format_date_mmm_dd_yyyy(date_str: str) -> str:
@@ -192,7 +221,7 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
     minutes = load_minutes_json(minutes_json_path)
 
     doc = Document(str(template_docx_path))
-    bullet_style = _pick_bullet_style_name(doc)
+    bullet_style, nested_bullet_style = _pick_bullet_style_names(doc)
 
     replaced: list[str] = []
 
@@ -200,13 +229,25 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
     date_placeholder = "<<date_of_meeting>>"
     formatted_date = _format_date_mmm_dd_yyyy(minutes.date_of_meeting)
     for p in _iter_all_paragraphs(doc):
-        if _replace_placeholder_in_paragraph(p, date_placeholder, formatted_date, bullet_style=bullet_style):
+        if _replace_placeholder_in_paragraph(
+            p,
+            date_placeholder,
+            formatted_date,
+            bullet_style=bullet_style,
+            nested_bullet_style=nested_bullet_style,
+        ):
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
         ph = f"(***{key}***)"
         for p in _iter_all_paragraphs(doc):
-            if _replace_placeholder_in_paragraph(p, ph, txt, bullet_style=bullet_style):
+            if _replace_placeholder_in_paragraph(
+                p,
+                ph,
+                txt,
+                bullet_style=bullet_style,
+                nested_bullet_style=nested_bullet_style,
+            ):
                 replaced.append(ph)
 
     output_docx_path.parent.mkdir(parents=True, exist_ok=True)
