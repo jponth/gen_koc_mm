@@ -1,11 +1,11 @@
 # gen_koc_mm
 
-Generate Knights of Columbus (KoC) council meeting minutes (JSON) from a **transcript text file**.
+Generate meeting minutes (JSON) from a **transcript text file** or from an **audio file** such as `.m4a` via local Whisper transcription.
 
 ## What this does
-- Takes a transcript text file (timestamps are ok; they will be stripped).
+- Takes either an audio file (for example `.m4a`) and transcribes it locally with Whisper, or a transcript text file directly (timestamps are ok; they will be stripped).
 - Keeps speakers as `Speaker 1`, `Speaker 2`, ... (no real-person mapping).
-- Splits the transcript into the KoC section template using cue phrases and safe regexes.
+- Splits the transcript into the sections using cue phrases and safe regexes.
 - Produces minutes as **JSON** (no timestamps, no header block).
 
 ## Output template
@@ -84,7 +84,7 @@ export OLLAMA_MODEL=gpt-oss:20b
 ## UI (Gradio)
 
 Local-only, upload-driven UI with 5 tabs matching the workflow:
-1) audio → transcript
+1) audio (`.m4a` supported) → transcript
 2) identify sections
 3) review/edit boundaries (Save As)
 4) generate minutes JSON
@@ -106,7 +106,7 @@ Then open the local URL Gradio prints (usually http://127.0.0.1:7860).
 
 This package exposes a Typer CLI:
 
-- `python -m gen_koc_mm transcribe` — transcribe an audio file locally to a transcript file (Whisper CLI)
+- `python -m gen_koc_mm transcribe` — transcribe an audio file, including `.m4a`, locally to a transcript file (Whisper CLI)
 - `python -m gen_koc_mm generate` — main minutes generation workflow (outputs JSON in phase 2)
 - `python -m gen_koc_mm merge-docx` — merge minutes JSON into a Word (.docx) template using placeholders
 - `python -m gen_koc_mm suggest-cues` — discover/update section boundary cues
@@ -263,4 +263,4 @@ Useful options:
 - If timestamps exist like `[00:01:23]` or `00:01:23` at line start, they are removed.
 
 ## Notes
-- This version assumes you start from transcript files (not m4a). We can add m4a transcription later.
+- This version supports both starting from transcript text files and transcribing audio files, including `.m4a`, locally via Whisper before generating minutes.

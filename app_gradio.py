@@ -447,6 +447,7 @@ def build_ui() -> gr.Blocks:
         overflow: hidden !important;
         white-space: nowrap;
     }
+
     """
 
     with gr.Blocks(title="KoC Meeting Minutes Generator", css=css) as demo:
@@ -501,7 +502,7 @@ def build_ui() -> gr.Blocks:
                         editor = gr.Code(
                             label="Marked transcript editor",
                             language="markdown",
-                            lines=22,
+                            lines=40,
                             show_line_numbers=True,
                             wrap_lines=True,
                         )

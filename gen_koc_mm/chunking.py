@@ -59,10 +59,6 @@ from .cues_config import load_section_cues
 _SECTION_CUES: dict[str, list[re.Pattern[str]]] = load_section_cues().cues
 
 
-_ABSENCE_CUES = re.compile(
-    r"\b(?:not\s+here|not\s+present|(?<!not\s)excused\s+tonight|we\s+have\s+no\s+\w+|is\s+not\s+here\s+tonight)\b",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -174,7 +170,6 @@ def chunk_utterances(utterances: Sequence[Utterance]) -> list[SectionChunk]:
 
 
 def section_is_absent(section_chunk: SectionChunk) -> bool:
-    if not section_chunk.text.strip():
-        return True
-    first = "\n".join(section_chunk.text.splitlines()[:10])
-    return bool(_ABSENCE_CUES.search(first))
+    # In phase 2 (generate JSON from a manually reviewed marked transcript),
+    # trust the edited boundaries and treat only truly empty chunks as absent.
+    return not section_chunk.text.strip()
