@@ -296,8 +296,8 @@ def merge_docx(
 
     The template should contain placeholders like:
       - <<date_of_meeting>>
-      - <<grand_knights_report>>
-      - <<chaplains_report>>
+      - (** grand_knights_report **)
+      - (** chaplains_report **)
 
     Placeholders can appear in normal paragraphs or table cells.
     """

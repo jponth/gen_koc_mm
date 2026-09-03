@@ -32,6 +32,12 @@ def load_minutes_json(path: Path) -> MinutesJSON:
     return MinutesJSON(date_of_meeting=date, sections=sections_map)
 
 
+def section_placeholder(key: str) -> str:
+    """Return the canonical DOCX placeholder for a section key."""
+
+    return f"(** {key} **)"
+
+
 def _insert_paragraph_after(paragraph: Paragraph, text: str = "", style: str | None = None) -> Paragraph:
     """Insert a new paragraph after the given paragraph."""
 
@@ -239,7 +245,7 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
-        ph = f"(***{key}***)"
+        ph = section_placeholder(key)
         for p in _iter_all_paragraphs(doc):
             if _replace_placeholder_in_paragraph(
                 p,

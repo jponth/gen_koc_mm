@@ -4,6 +4,8 @@ from pathlib import Path
 
 from docx import Document
 
+from .docx_merge import section_placeholder
+
 
 def make_template(*, output_path: Path) -> None:
     doc = Document()
@@ -37,7 +39,7 @@ def make_template(*, output_path: Path) -> None:
         doc.add_heading(heading, level=2)
         # Placeholder must be the only content in the paragraph so merge-docx
         # can expand markdown bullets into true Word bullet paragraphs.
-        doc.add_paragraph(f"<<{key}>>")
+        doc.add_paragraph(section_placeholder(key))
         doc.add_paragraph("")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

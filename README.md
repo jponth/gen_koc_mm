@@ -210,10 +210,10 @@ A known-good, compatible template is included:
 
 Your template should contain placeholders like:
 - `<<date_of_meeting>>`
-- `<<grand_knights_report>>`
-- `<<chaplains_report>>`
+- `(** grand_knights_report **)`
+- `(** chaplains_report **)`
 
-Section keys are canonical **snake_case** (underscores). Older space-separated keys are still accepted in marked transcripts (e.g. `** grand knights report **`), but the JSON output + Word placeholders use snake_case.
+Section keys are canonical **snake_case** (underscores). Older space-separated keys are still accepted in marked transcripts (e.g. `** grand knights report **`), but the JSON output + Word placeholders use snake_case with section placeholders in the form `(** section_key **)`.
 
 Example:
 
