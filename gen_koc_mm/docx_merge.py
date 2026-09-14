@@ -38,6 +38,24 @@ def section_placeholder(key: str) -> str:
     return f"(** {key} **)"
 
 
+def section_placeholder_variants(key: str) -> list[str]:
+    """Return canonical plus legacy placeholder variants for a section key."""
+
+    variants = [
+        section_placeholder(key),   # (** key **)
+        f"(**{key}**)",             # (**key**)
+        f"(***{key}***)",           # (***key***)
+        f"({key})",                 # (key)
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for variant in variants:
+        if variant not in seen:
+            seen.add(variant)
+            out.append(variant)
+    return out
+
+
 def _insert_paragraph_after(paragraph: Paragraph, text: str = "", style: str | None = None) -> Paragraph:
     """Insert a new paragraph after the given paragraph."""
 
@@ -245,16 +263,17 @@ def merge_minutes_into_docx(*, minutes_json_path: Path, template_docx_path: Path
             replaced.append(date_placeholder)
 
     for key, txt in minutes.sections.items():
-        ph = section_placeholder(key)
         for p in _iter_all_paragraphs(doc):
-            if _replace_placeholder_in_paragraph(
-                p,
-                ph,
-                txt,
-                bullet_style=bullet_style,
-                nested_bullet_style=nested_bullet_style,
-            ):
-                replaced.append(ph)
+            for ph in section_placeholder_variants(key):
+                if _replace_placeholder_in_paragraph(
+                    p,
+                    ph,
+                    txt,
+                    bullet_style=bullet_style,
+                    nested_bullet_style=nested_bullet_style,
+                ):
+                    replaced.append(ph)
+                    break
 
     output_docx_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output_docx_path))

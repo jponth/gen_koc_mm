@@ -13,6 +13,7 @@ output/
 
 # Few-shot examples are not part of the package.
 fewshot_examples/
+fewshot_examples.sqlite
 
 # Local data / samples
 input/
@@ -40,3 +41,6 @@ templates/
 
 # Logs
 *.log
+
+# RAG input files
+rag_input_files/

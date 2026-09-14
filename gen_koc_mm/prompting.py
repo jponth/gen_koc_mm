@@ -8,6 +8,9 @@ from typing import Optional
 
 import importlib.resources as pkg_resources
 
+from .fewshot_db import count_examples as count_fewshot_db_examples
+from .fewshot_db import load_all_examples as load_all_fewshot_db_examples
+from .fewshot_db import retrieve_examples as retrieve_fewshot_db_examples
 from .sections import SECTION_DEFS, SECTION_HEADINGS
 
 
@@ -21,9 +24,11 @@ def minutes_system_prompt() -> str:
             3. Do not format the output as Markdown, bullets, headings, or sections.
             4. Output plain text only.
             5. Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
-            6. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-            7. Do NOT include any timestamps anywhere.
-            8. If there is no substantive content for this section, output nothing (empty string).
+            6. Do not refer to unnamed speakers as Speaker 1, Speaker 2, or similar labels.
+            7. Only mention a person when the transcript explicitly identifies them by name or role and that identification is relevant.
+            8. If a statement is important but the speaker is unnamed, summarize the statement without speaker attribution.
+            9. Do NOT include any timestamps anywhere.
+            10. If there is no substantive content for this section, output nothing (empty string).
         """
 
     return system_prompt
@@ -70,6 +75,15 @@ def _read_json_text() -> tuple[str, Optional[Path]]:
     return raw, None
 
 
+def _fewshot_source_mode() -> str:
+    raw = os.environ.get("GEN_KOC_MM_FEWSHOT_SOURCE", "").strip().lower()
+    if raw in {"sqlite", "db", "sqlite/fts5"}:
+        return "sqlite"
+    if raw in {"folder", "file", "files", "fewshot"}:
+        return "folder"
+    return "auto"
+
+
 def load_fewshot_config() -> FewShotConfig:
     """Load few-shot examples for minutes generation.
 
@@ -107,6 +121,19 @@ def load_fewshot_config() -> FewShotConfig:
     - section_key must match a canonical key from section_headings.json, or "*" for global examples.
     - Incomplete examples are skipped to allow placeholders.
     """
+    global _FEWSHOT_SOURCE_LABEL
+
+    source_mode = _fewshot_source_mode()
+
+    if source_mode == "sqlite":
+        _FEWSHOT_SOURCE_LABEL = "SQLite/FTS5"
+        return _load_fewshot_from_db()
+
+    if source_mode == "auto" and count_fewshot_db_examples() > 0:
+        _FEWSHOT_SOURCE_LABEL = "SQLite/FTS5"
+        return _load_fewshot_from_db()
+
+    _FEWSHOT_SOURCE_LABEL = "packaged JSON"
 
     raw, override_path = _read_json_text()
 
@@ -204,6 +231,11 @@ def load_fewshot_config() -> FewShotConfig:
 
 # Simple module-level cache so we don't re-read JSON for every section.
 _FEWSHOT_CACHE: Optional[FewShotConfig] = None
+_FEWSHOT_SOURCE_LABEL = "packaged JSON"
+
+
+def get_fewshot_source_label() -> str:
+    return _FEWSHOT_SOURCE_LABEL
 
 
 def validate_fewshot_config() -> FewShotConfig:
@@ -232,6 +264,21 @@ def _get_fewshot_config() -> FewShotConfig:
     return _FEWSHOT_CACHE
 
 
+def _load_fewshot_from_db() -> FewShotConfig:
+    db_examples = load_all_fewshot_db_examples()
+    out = [
+        FewShotExample(
+            title=f"{ex.section_key} ({ex.meeting_date or 'undated'})",
+            section_key=ex.section_key,
+            transcript=ex.transcript_text,
+            expected_bullets=(ex.minutes_text.rstrip() + "\n"),
+        )
+        for ex in db_examples
+        if ex.transcript_text.strip() and ex.minutes_text.strip()
+    ]
+    return FewShotConfig(examples=out)
+
+
 def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key: str) -> str:
     if not examples:
         return ""
@@ -241,7 +288,7 @@ def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key:
     if not picked:
         return ""
 
-    blocks: list[str] = ["Few-shot examples (raw transcript -> extractive plain-text summary):"]
+    blocks: list[str] = ["Few-shot examples (transcript -> final section minutes):"]
     for i, ex in enumerate(picked, start=1):
         blocks.append(f"Example {i}: {ex.title}")
         blocks.append(f"Applies to section_key: {ex.section_key}")
@@ -252,6 +299,24 @@ def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key:
         blocks.append("")
 
     return "\n".join(blocks).rstrip() + "\n\n"
+
+
+def _retrieved_db_fewshot_examples(*, target_section_key: str, section_transcript: str) -> list[FewShotExample]:
+    retrieved = retrieve_fewshot_db_examples(
+        section_key=target_section_key,
+        query_text=section_transcript,
+        limit=2,
+    )
+    return [
+        FewShotExample(
+            title=f"{ex.section_key} ({ex.meeting_date or 'undated'})",
+            section_key=ex.section_key,
+            transcript=ex.transcript_text,
+            expected_bullets=(ex.minutes_text.rstrip() + "\n"),
+        )
+        for ex in retrieved
+        if ex.transcript_text.strip() and ex.minutes_text.strip()
+    ]
 
 
 def format_minutes_system_prompt() -> str:
@@ -265,11 +330,13 @@ def format_minutes_system_prompt() -> str:
             4. Each top-level bullet line must start with '- '. Nested bullets may be used for grouped sub-sections.
             5. Keep bullet nesting to at most 2 levels deep.
             6. Maintain the original meaning, order, specificity, terminology, and numbers from the input summary.
-            7. Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
-            8. Do NOT include any timestamps anywhere.
-            9. Do NOT add any header block.
-            10. Output MUST be only Markdown bullet lists, with nested bullets when helpful.
-            11. If the input is empty or has no substantive content, output nothing (empty string).
+            7. Do not use labels like Speaker 1, Speaker 2, or similar speaker placeholders in the final minutes.
+            8. Only mention a person when the input explicitly identifies them by name or role and that identification is relevant.
+            9. Otherwise, write the minutes without speaker attribution.
+            10. Do NOT include any timestamps anywhere.
+            11. Do NOT add any header block.
+            12. Output MUST be only Markdown bullet lists, with nested bullets when helpful.
+            13. If the input is empty or has no substantive content, output nothing (empty string).
         """
     return system_prompt
 
@@ -289,6 +356,9 @@ def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> st
         - Do not add new facts, decisions, names, dates, amounts, or action items.
         - Output only Markdown bullet lists.
         - Use nested bullets only when they help group related content under a clear context change.
+        - Do not use labels like Speaker 1, Speaker 2, or similar speaker placeholders in the final minutes.
+        - Only mention a person when the input explicitly identifies them and that identification is relevant.
+        - Otherwise, write the minutes without speaker attribution.
         - If the input is empty, output an empty string.
 
         Input summary:
@@ -301,23 +371,45 @@ def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> st
 def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str:
     """Prompt for a single section.
 
-    Prompt includes optional few-shot examples loaded from minutes_fewshot.json.
-
-    Few-shot selection rule:
-      - include examples where section_key == "*" (global)
-      - plus examples where section_key matches the target section key
+    Prompt includes optional few-shot examples retrieved from SQLite/FTS5 when
+    available, with a fallback to the packaged JSON examples.
     """
 
     heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
     target_key = heading_to_key.get(_norm_key(section_heading), "")
 
-    fewshot = _get_fewshot_config()
-    fewshot_block = _render_fewshot_block(examples=fewshot.examples, target_section_key=target_key)
+    fewshot_examples: list[FewShotExample] = []
+    source_label = "packaged JSON"
+    source_mode = _fewshot_source_mode()
+
+    if target_key and source_mode == "sqlite":
+        fewshot_examples = _retrieved_db_fewshot_examples(
+            target_section_key=target_key,
+            section_transcript=section_transcript,
+        )
+        source_label = "SQLite/FTS5"
+    elif target_key and source_mode == "auto" and count_fewshot_db_examples() > 0:
+        fewshot_examples = _retrieved_db_fewshot_examples(
+            target_section_key=target_key,
+            section_transcript=section_transcript,
+        )
+        source_label = "SQLite/FTS5"
+
+    if not fewshot_examples:
+        fewshot = _get_fewshot_config()
+        fewshot_examples = fewshot.examples
+        source_label = get_fewshot_source_label()
+
+    fewshot_block = _render_fewshot_block(examples=fewshot_examples, target_section_key=target_key)
 
     examples_block = ""
     if fewshot_block.strip():
         examples_block = f"""
-        Here are a few examples of transcripts and the corresponding expected extractive summaries:
+        Here are a few reference examples from the {source_label} few-shot source.
+
+        The example outputs are final section minutes, not this step's plain-text draft.
+        Use them only to understand what kinds of details matter for this section.
+        Do not copy wording from them, and still output plain text only for this step.
 
         {fewshot_block}
         """
@@ -335,7 +427,9 @@ def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str
         - Do not format the output as Markdown, bullets, headings, or sections.
         - Output plain text only.
         - Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
-        - Speakers must remain generic: Speaker 1, Speaker 2, ... (do NOT map to real people).
+        - Do not refer to unnamed speakers as Speaker 1, Speaker 2, or similar labels.
+        - Only mention a person when the transcript explicitly identifies them by name or role and that identification is relevant.
+        - If a statement is important but the speaker is unnamed, summarize the statement without speaker attribution.
         - Do NOT include any timestamps anywhere.
         - If there is no substantive content in this section, output an empty string.
 

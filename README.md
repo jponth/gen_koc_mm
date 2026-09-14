@@ -83,12 +83,13 @@ export OLLAMA_MODEL=gpt-oss:20b
 
 ## UI (Gradio)
 
-Local-only, upload-driven UI with 5 tabs matching the workflow:
-1) audio (`.m4a` supported) → transcript
-2) identify sections
-3) review/edit boundaries (Save As)
-4) generate minutes JSON
-5) merge JSON into Word template
+Local-only, upload-driven UI with tabs matching the workflow:
+1) populate few-shot examples into the local SQLite/FTS5 store
+2) audio (`.m4a` supported) → transcript
+3) identify sections
+4) review/edit boundaries (Save As)
+5) generate minutes JSON
+6) merge JSON into Word template
 
 Run:
 
@@ -101,6 +102,19 @@ python app_gradio.py
 ```
 
 Then open the local URL Gradio prints (usually http://127.0.0.1:7860).
+
+## Few-shot examples
+
+The generator can use section-specific few-shot examples from a local SQLite/FTS5 store at:
+
+- `fewshot_examples.sqlite`
+
+When this DB contains examples, prompt generation retrieves examples by:
+
+1. exact `section_key`
+2. FTS5 ranking against the current section transcript
+
+If the DB is empty, the code falls back to the packaged `minutes_fewshot.json` examples.
 
 ## CLI
 
@@ -140,6 +154,7 @@ Options:
 - `--generate-output` — phase 2 (creates minutes JSON)
 - `--date-of-meeting TEXT` — set JSON field `date_of_meeting` (best-effort inferred from filename if omitted)
 - `--provider TEXT` — LLM provider (`openai` or `ollama`)
+- `--fewshot-source TEXT` — few-shot example source (`sqlite` or `folder`); default is `sqlite`
 - `--model TEXT` — override model name (otherwise uses `OPENAI_MODEL` or `OLLAMA_MODEL`; defaults: `gpt-5-mini` for OpenAI, `gpt-oss:20b` for Ollama)
 - `--debug-chunks` — when generating output, write per-section transcript chunks next to the output for inspection
 - `--minutes-style bullets` — final minutes style. Currently only `bullets` is supported.

@@ -4,7 +4,8 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+import re
+from typing import Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,35 @@ class TranscribeResult:
     whisper_stderr: str
 
 
+ProgressCallback = Callable[[int, int, str], None]
+
+
+def _coerce_bool_arg(value: bool) -> str:
+    return "True" if value else "False"
+
+
+def _maybe_report_progress(
+    line: str,
+    *,
+    total_bytes: int,
+    progress_callback: Optional[ProgressCallback],
+) -> None:
+    if progress_callback is None:
+        return
+
+    match = re.search(r"(\d+)/(\d+)", line)
+    if not match:
+        return
+
+    current_frames = int(match.group(1))
+    total_frames = int(match.group(2))
+    if total_frames <= 0:
+        return
+
+    current_bytes = min(total_bytes, int(total_bytes * (current_frames / total_frames)))
+    progress_callback(current_bytes, total_bytes, "Transcribing audio")
+
+
 def transcribe_with_whisper_cli(
     *,
     input_audio: Path,
@@ -21,6 +51,8 @@ def transcribe_with_whisper_cli(
     model: str = "medium",
     language: Optional[str] = "en",
     output_format: str = "txt",
+    verbose: Optional[bool] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> TranscribeResult:
     """Transcribe audio locally using the Whisper CLI binary (`whisper`).
 
@@ -63,14 +95,75 @@ def transcribe_with_whisper_cli(
     ]
     if language:
         cmd += ["--language", language]
+    if verbose is not None:
+        cmd += ["--verbose", _coerce_bool_arg(verbose)]
 
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    if proc.returncode != 0:
+    total_bytes = max(input_audio.stat().st_size, 1)
+    if progress_callback is not None:
+        progress_callback(0, total_bytes, "Starting Whisper")
+
+    if progress_callback is None:
+        proc = subprocess.run(cmd, text=True, capture_output=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "Whisper transcription failed.\n"
+                f"Command: {' '.join(cmd)}\n\n"
+                f"stdout:\n{proc.stdout}\n\n"
+                f"stderr:\n{proc.stderr}\n"
+            )
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+    else:
+        proc = subprocess.Popen(
+            cmd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+        combined_chunks: list[str] = []
+        current_line = ""
+        assert proc.stdout is not None
+        while True:
+            ch = proc.stdout.read(1)
+            if ch == "" and proc.poll() is not None:
+                break
+            if not ch:
+                continue
+            combined_chunks.append(ch)
+            current_line += ch
+            if ch in {"\r", "\n"}:
+                _maybe_report_progress(
+                    current_line,
+                    total_bytes=total_bytes,
+                    progress_callback=progress_callback,
+                )
+                current_line = ""
+        if current_line:
+            _maybe_report_progress(
+                current_line,
+                total_bytes=total_bytes,
+                progress_callback=progress_callback,
+            )
+        returncode = proc.wait()
+        stdout_text = "".join(combined_chunks)
+        stderr_text = ""
+        if returncode != 0:
+            raise RuntimeError(
+                "Whisper transcription failed.\n"
+                f"Command: {' '.join(cmd)}\n\n"
+                f"output:\n{stdout_text}\n"
+            )
+
+    if progress_callback is not None:
+        progress_callback(total_bytes, total_bytes, "Finalizing transcript")
+
+    if progress_callback is None and proc.returncode != 0:
         raise RuntimeError(
             "Whisper transcription failed.\n"
             f"Command: {' '.join(cmd)}\n\n"
-            f"stdout:\n{proc.stdout}\n\n"
-            f"stderr:\n{proc.stderr}\n"
+            f"stdout:\n{stdout_text}\n\n"
+            f"stderr:\n{stderr_text}\n"
         )
 
     if not expected.exists():
@@ -87,6 +180,6 @@ def transcribe_with_whisper_cli(
 
     return TranscribeResult(
         output_path=output_path,
-        whisper_stdout=proc.stdout,
-        whisper_stderr=proc.stderr,
+        whisper_stdout=stdout_text,
+        whisper_stderr=stderr_text,
     )
