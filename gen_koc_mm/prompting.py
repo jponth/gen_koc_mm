@@ -319,6 +319,32 @@ def _retrieved_db_fewshot_examples(*, target_section_key: str, section_transcrip
     ]
 
 
+def _select_fewshot_examples(*, target_section_key: str, section_transcript: str) -> tuple[list[FewShotExample], str]:
+    fewshot_examples: list[FewShotExample] = []
+    source_label = "packaged JSON"
+    source_mode = _fewshot_source_mode()
+
+    if target_section_key and source_mode == "sqlite":
+        fewshot_examples = _retrieved_db_fewshot_examples(
+            target_section_key=target_section_key,
+            section_transcript=section_transcript,
+        )
+        source_label = "SQLite/FTS5"
+    elif target_section_key and source_mode == "auto" and count_fewshot_db_examples() > 0:
+        fewshot_examples = _retrieved_db_fewshot_examples(
+            target_section_key=target_section_key,
+            section_transcript=section_transcript,
+        )
+        source_label = "SQLite/FTS5"
+
+    if not fewshot_examples:
+        fewshot = _get_fewshot_config()
+        fewshot_examples = fewshot.examples
+        source_label = get_fewshot_source_label()
+
+    return fewshot_examples, source_label
+
+
 def format_minutes_system_prompt() -> str:
     system_prompt = """
             You are an AI Assistant that formats an extractive section summary into final meeting minutes in Markdown.
@@ -341,8 +367,28 @@ def format_minutes_system_prompt() -> str:
     return system_prompt
 
 
-def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> str:
+def format_minutes_user_prompt(*, section_heading: str, summary_text: str, section_transcript: str = "") -> str:
     summary_text = (summary_text or "").strip()
+    heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
+    target_key = heading_to_key.get(_norm_key(section_heading), "")
+
+    fewshot_examples, source_label = _select_fewshot_examples(
+        target_section_key=target_key,
+        section_transcript=section_transcript,
+    )
+    fewshot_block = _render_fewshot_block(examples=fewshot_examples, target_section_key=target_key)
+
+    examples_block = ""
+    if fewshot_block.strip():
+        examples_block = f"""
+        Here are a few reference examples from the {source_label} few-shot source.
+
+        These examples show the target final minutes style for this section.
+        Use them to match structure, grouping, specificity, and level of detail.
+        Do not copy wording from them unless the same facts are explicitly supported by the input summary.
+
+        {fewshot_block}
+        """
 
     user_prompt = f"""
         You are formatting the final minutes for the section '{section_heading}'.
@@ -361,6 +407,7 @@ def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> st
         - Otherwise, write the minutes without speaker attribution.
         - If the input is empty, output an empty string.
 
+        {examples_block}
         Input summary:
         {summary_text}
         """.strip()
@@ -371,48 +418,9 @@ def format_minutes_user_prompt(*, section_heading: str, summary_text: str) -> st
 def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str:
     """Prompt for a single section.
 
-    Prompt includes optional few-shot examples retrieved from SQLite/FTS5 when
-    available, with a fallback to the packaged JSON examples.
+    This stage intentionally does not include few-shot examples. Final minutes
+    examples are injected in the formatting stage instead.
     """
-
-    heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
-    target_key = heading_to_key.get(_norm_key(section_heading), "")
-
-    fewshot_examples: list[FewShotExample] = []
-    source_label = "packaged JSON"
-    source_mode = _fewshot_source_mode()
-
-    if target_key and source_mode == "sqlite":
-        fewshot_examples = _retrieved_db_fewshot_examples(
-            target_section_key=target_key,
-            section_transcript=section_transcript,
-        )
-        source_label = "SQLite/FTS5"
-    elif target_key and source_mode == "auto" and count_fewshot_db_examples() > 0:
-        fewshot_examples = _retrieved_db_fewshot_examples(
-            target_section_key=target_key,
-            section_transcript=section_transcript,
-        )
-        source_label = "SQLite/FTS5"
-
-    if not fewshot_examples:
-        fewshot = _get_fewshot_config()
-        fewshot_examples = fewshot.examples
-        source_label = get_fewshot_source_label()
-
-    fewshot_block = _render_fewshot_block(examples=fewshot_examples, target_section_key=target_key)
-
-    examples_block = ""
-    if fewshot_block.strip():
-        examples_block = f"""
-        Here are a few reference examples from the {source_label} few-shot source.
-
-        The example outputs are final section minutes, not this step's plain-text draft.
-        Use them only to understand what kinds of details matter for this section.
-        Do not copy wording from them, and still output plain text only for this step.
-
-        {fewshot_block}
-        """
 
     user_prompt = f"""
         You are generating an extractive summary for the meeting section: '{section_heading}'.
@@ -433,7 +441,6 @@ def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str
         - Do NOT include any timestamps anywhere.
         - If there is no substantive content in this section, output an empty string.
 
-        {examples_block}
         Transcript for this section:
         {section_transcript}
         """.strip()

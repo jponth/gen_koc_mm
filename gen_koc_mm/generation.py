@@ -173,7 +173,11 @@ def generate_minutes_output(
                 )
             continue
 
-        format_user_p = format_minutes_user_prompt(section_heading=ch.heading, summary_text=summary_text)
+        format_user_p = format_minutes_user_prompt(
+            section_heading=ch.heading,
+            summary_text=summary_text,
+            section_transcript=ch.text,
+        )
 
         (logs_dir / f"{base}.formatting.system.txt").write_text(format_sys_p + "\n", encoding="utf-8")
         (logs_dir / f"{base}.formatting.user.txt").write_text(format_user_p + "\n", encoding="utf-8")
