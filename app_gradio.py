@@ -34,8 +34,10 @@ from gen_koc_mm.fewshot_db import (
     delete_example,
     find_conflicts,
     get_example,
+    get_last_meeting_date,
     list_examples,
     save_examples,
+    set_last_meeting_date,
     update_example,
 )
 from gen_koc_mm.fewshot_docx import parse_minutes_docx
@@ -112,6 +114,44 @@ def _derived_minutes_docx_path(src: Path) -> Path:
 def _today_iso() -> str:
     """Return today's date in YYYY-MM-DD (local time)."""
     return date.today().isoformat()
+
+
+def _normalize_meeting_date_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value).date().isoformat()
+
+    text = str(value).strip()
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        text = text[:10]
+
+    try:
+        return date.fromisoformat(text).isoformat()
+    except Exception:
+        return text
+
+
+def _default_meeting_date() -> str:
+    saved = (get_last_meeting_date(path=DEFAULT_FEWSHOT_DB) or "").strip()
+    return saved or _today_iso()
+
+
+def ui_sync_meeting_date(meeting_date_value: Any):
+    normalized = _normalize_meeting_date_value(meeting_date_value) or _default_meeting_date()
+    set_last_meeting_date(normalized, path=DEFAULT_FEWSHOT_DB)
+    return (
+        normalized,
+        gr.update(value=normalized),
+        gr.update(value=normalized),
+        gr.update(value=normalized),
+        gr.update(value=normalized),
+        gr.update(value=normalized),
+    )
 
 
 def _ensure_dirs() -> None:
@@ -276,6 +316,7 @@ def _browser_form_updates(record: Optional[dict[str, Any]], *, editable: bool):
             gr.update(value="", interactive=False),
             gr.update(value="", interactive=editable),
             gr.update(value="", interactive=editable),
+            gr.update(value="", interactive=editable),
         )
 
     return (
@@ -288,6 +329,7 @@ def _browser_form_updates(record: Optional[dict[str, Any]], *, editable: bool):
         gr.update(value=record.get("created_at", ""), interactive=False),
         gr.update(value=record.get("updated_at", ""), interactive=False),
         gr.update(value=record["transcript_text"], interactive=editable),
+        gr.update(value=record.get("cleaned_transcript_text", ""), interactive=editable),
         gr.update(value=record["minutes_text"], interactive=editable),
     )
 
@@ -437,6 +479,7 @@ def ui_browser_save(
     source_transcript_path: str,
     source_docx_path: str,
     transcript_text: str,
+    cleaned_transcript_text: str,
     minutes_text: str,
 ):
     if not example_id.strip():
@@ -455,6 +498,7 @@ def ui_browser_save(
             source_transcript_path=source_transcript_path,
             source_docx_path=source_docx_path,
             transcript_text=transcript_text,
+            cleaned_transcript_text=cleaned_transcript_text,
             minutes_text=minutes_text,
             path=DEFAULT_FEWSHOT_DB,
         )
@@ -471,6 +515,7 @@ def ui_browser_save(
                 "created_at": "",
                 "updated_at": "",
                 "transcript_text": transcript_text,
+                "cleaned_transcript_text": cleaned_transcript_text,
                 "minutes_text": minutes_text,
             },
             editable=True,
@@ -585,10 +630,13 @@ def _review_rows(review_state: dict[str, Any]) -> list[list[str]]:
                 heading,
                 "Yes" if transcript_text else "No",
                 str(len(transcript_text)),
+                "No",
+                "0",
                 "Yes" if minutes_text else "No",
                 str(len(minutes_text)),
                 ready,
                 _summarize_text(transcript_text),
+                "",
                 _summarize_text(minutes_text),
             ]
         )
@@ -632,7 +680,7 @@ def _select_default_section(review_state: dict[str, Any]) -> str:
     return SECTION_DEFS[0].key
 
 
-def _row_preview_bundle(review_state: dict[str, Any], section_key: str) -> tuple[Any, str, str, str]:
+def _row_preview_bundle(review_state: dict[str, Any], section_key: str) -> tuple[Any, str, str, str, str]:
     choices = _word_section_choices(review_state)
     assignments = review_state.get("assignments") or {}
     transcript_sections = review_state.get("transcript_sections") or {}
@@ -645,6 +693,7 @@ def _row_preview_bundle(review_state: dict[str, Any], section_key: str) -> tuple
         gr.update(choices=choices, value=source_id),
         heading,
         transcript_text,
+        "",
         minutes_text,
     )
 
@@ -713,6 +762,7 @@ def ui_parse_fewshot_examples(marked_file, minutes_docx_file):
             "",
             "",
             "",
+            "",
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
@@ -751,6 +801,7 @@ def ui_parse_fewshot_examples(marked_file, minutes_docx_file):
             "",
             "",
             "",
+            "",
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
@@ -786,7 +837,7 @@ def ui_parse_fewshot_examples(marked_file, minutes_docx_file):
     }
 
     selected_key = _select_default_section(review_state)
-    assigned_dropdown, heading_text, transcript_preview_text, minutes_preview_text = _row_preview_bundle(
+    assigned_dropdown, heading_text, transcript_preview_text, cleaned_preview_text, minutes_preview_text = _row_preview_bundle(
         review_state, selected_key
     )
 
@@ -799,6 +850,7 @@ def ui_parse_fewshot_examples(marked_file, minutes_docx_file):
         assigned_dropdown,
         heading_text,
         transcript_preview_text,
+        cleaned_preview_text,
         minutes_preview_text,
         gr.update(interactive=True),
         gr.update(interactive=True),
@@ -822,10 +874,11 @@ def ui_refresh_fewshot_review(review_state: dict[str, Any], selected_key: str):
             "",
             "",
             "",
+            "",
         )
 
     selected = selected_key if selected_key in {sec.key for sec in SECTION_DEFS} else _select_default_section(review_state)
-    assigned_dropdown, heading_text, transcript_preview_text, minutes_preview_text = _row_preview_bundle(
+    assigned_dropdown, heading_text, transcript_preview_text, cleaned_preview_text, minutes_preview_text = _row_preview_bundle(
         review_state, selected
     )
     return (
@@ -837,6 +890,7 @@ def ui_refresh_fewshot_review(review_state: dict[str, Any], selected_key: str):
         assigned_dropdown,
         heading_text,
         transcript_preview_text,
+        cleaned_preview_text,
         minutes_preview_text,
     )
 
@@ -859,7 +913,7 @@ def ui_apply_word_assignment(review_state: dict[str, Any], target_key: str, sour
     updated_state = dict(review_state)
     updated_state["assignments"] = assignments
 
-    assigned_dropdown, heading_text, transcript_preview_text, minutes_preview_text = _row_preview_bundle(
+    assigned_dropdown, heading_text, transcript_preview_text, cleaned_preview_text, minutes_preview_text = _row_preview_bundle(
         updated_state, target_key
     )
     moved_msg = f" Moved it from `{old_target}`." if old_target and old_target != target_key else ""
@@ -874,13 +928,14 @@ def ui_apply_word_assignment(review_state: dict[str, Any], target_key: str, sour
         assigned_dropdown,
         heading_text,
         transcript_preview_text,
+        cleaned_preview_text,
         minutes_preview_text,
     )
 
 
 def ui_preview_fewshot_row(review_state: dict[str, Any], selected_key: str):
     if not review_state or not review_state.get("source_transcript_path"):
-        return gr.update(choices=[("(Unmatched)", "")], value=""), "", "", ""
+        return gr.update(choices=[("(Unmatched)", "")], value=""), "", "", "", ""
     return _row_preview_bundle(review_state, selected_key)
 
 
@@ -1235,7 +1290,8 @@ def ui_generate_json(
     marked_path_text: str,
     date_of_meeting,
     provider: str,
-    model_override: str,
+    transcript_model_override: str,
+    minutes_model_override: str,
     debug_chunks: bool,
     fewshot_source: str,
     progress=gr.Progress(),
@@ -1264,20 +1320,7 @@ def ui_generate_json(
         "--output",
         str(out_path),
     ]
-    # gr.DateTime can return timestamp (float), datetime, or string depending on `type=`.
-    date_str: str = ""
-    if date_of_meeting is None:
-        date_str = ""
-    elif isinstance(date_of_meeting, (datetime, date)):
-        date_str = date_of_meeting.date().isoformat() if isinstance(date_of_meeting, datetime) else date_of_meeting.isoformat()
-    elif isinstance(date_of_meeting, (int, float)):
-        # timestamp seconds
-        date_str = datetime.fromtimestamp(date_of_meeting).date().isoformat()
-    else:
-        date_str = str(date_of_meeting).strip()
-        # If something like "YYYY-MM-DD 00:00:00" slips through, keep the date part.
-        if len(date_str) >= 10 and date_str[4:5] == "-" and date_str[7:8] == "-":
-            date_str = date_str[:10]
+    date_str = _normalize_meeting_date_value(date_of_meeting)
 
     if date_str:
         args += ["--date-of-meeting", date_str]
@@ -1285,8 +1328,10 @@ def ui_generate_json(
     prov = "ollama" if "ollama" in prov else "openai"
     args += ["--provider", prov]
 
-    if model_override and model_override.strip():
-        args += ["--model", model_override.strip()]
+    if transcript_model_override and transcript_model_override.strip():
+        args += ["--transcript-model", transcript_model_override.strip()]
+    if minutes_model_override and minutes_model_override.strip():
+        args += ["--minutes-model", minutes_model_override.strip()]
     if debug_chunks:
         args += ["--debug-chunks"]
     fewshot_source_norm = (fewshot_source or "sqlite").strip().lower()
@@ -1311,7 +1356,8 @@ def ui_generate_json(
             output_path=out_path,
             date_of_meeting=date_str,
             provider=prov,
-            model=model_override.strip() or None,
+            transcript_model=transcript_model_override.strip() or None,
+            minutes_model=minutes_model_override.strip() or None,
             debug_chunks=debug_chunks,
             fewshot_source=fewshot_source_norm,
             progress_callback=lambda current, total, message: _update_progress(
@@ -1386,6 +1432,7 @@ def ui_merge_docx(
 
 
 def build_ui() -> gr.Blocks:
+    initial_meeting_date = _default_meeting_date()
     css = """
     /* Make Gradio file upload dropzones more compact.
        Gradio's internal DOM/classes vary by version/theme, so we target several.
@@ -1446,6 +1493,7 @@ def build_ui() -> gr.Blocks:
         st_marked_path = gr.State(value="")
         st_edited_marked_path = gr.State(value="")
         st_minutes_json_path = gr.State(value="")
+        st_meeting_date = gr.State(value=initial_meeting_date)
 
         with gr.Tabs():
             with gr.Tab("View Fewshot Examples"):
@@ -1507,6 +1555,11 @@ def build_ui() -> gr.Blocks:
                             browser_updated_at = gr.Textbox(label="Updated at", interactive=False)
 
                         browser_transcript_text = gr.Textbox(label="Transcript text", lines=12, interactive=False)
+                        browser_cleaned_transcript_text = gr.Textbox(
+                            label="Cleaned transcript text",
+                            lines=12,
+                            interactive=False,
+                        )
                         browser_minutes_text = gr.Textbox(label="Minutes text", lines=12, interactive=False)
 
             with gr.Tab("Populate Fewshot Examples"):
@@ -1529,17 +1582,20 @@ def build_ui() -> gr.Blocks:
                         "Assigned Word Heading",
                         "Transcript?",
                         "Transcript Chars",
+                        "Cleaned?",
+                        "Cleaned Chars",
                         "Minutes?",
                         "Minutes Chars",
                         "Ready",
                         "Transcript Preview",
+                        "Cleaned Preview",
                         "Minutes Preview",
                     ],
-                    datatype=["str"] * 9,
+                    datatype=["str"] * 12,
                     interactive=False,
                     wrap=True,
                     row_count=(len(SECTION_DEFS), "fixed"),
-                    column_count=(9, "fixed"),
+                    column_count=(12, "fixed"),
                     value=[],
                     label="Review table",
                 )
@@ -1563,6 +1619,7 @@ def build_ui() -> gr.Blocks:
                 assigned_word_heading = gr.Textbox(label="Assigned Word heading", interactive=False)
                 with gr.Row():
                     transcript_preview = gr.Textbox(label="Transcript text", lines=14)
+                    cleaned_transcript_preview = gr.Textbox(label="Cleaned transcript text", lines=14, interactive=False)
                     minutes_preview = gr.Textbox(label="Minutes text", lines=14)
 
                 with gr.Row():
@@ -1581,8 +1638,12 @@ def build_ui() -> gr.Blocks:
 
             # 1) Transcribe
             with gr.Tab("1) Audio → Transcript"):
+                meeting_date_tab1 = gr.Textbox(
+                    value=initial_meeting_date,
+                    label="Meeting date (YYYY-MM-DD)",
+                )
                 audio = gr.File(label="Upload audio file(s) (m4a/mp3/wav/mp4)", file_count="multiple", elem_classes=["compact-upload"])
-                with gr.Accordion("Advanced options", open=False):
+                with gr.Accordion("Advanced options", open=True):
                     whisper_model = gr.Textbox(value="medium", label="Whisper model")
                     language = gr.Textbox(value="en", label="Language (e.g., en). Leave blank for auto-detect")
 
@@ -1593,6 +1654,10 @@ def build_ui() -> gr.Blocks:
 
             # 2) Identify sections
             with gr.Tab("2) Identify Sections"):
+                meeting_date_tab2 = gr.Textbox(
+                    value=initial_meeting_date,
+                    label="Meeting date (YYYY-MM-DD)",
+                )
                 transcript_upload = gr.File(label="Upload transcript (.txt)", elem_classes=["compact-upload"])
                 transcript_path_echo = gr.Textbox(
                     label="Or use transcript from Tab 1 (path)",
@@ -1604,6 +1669,10 @@ def build_ui() -> gr.Blocks:
                 log2 = gr.Textbox(label="Command log", lines=10)
             # 3) Edit boundaries
             with gr.Tab("3) Review/Edit Boundaries"):
+                meeting_date_tab3 = gr.Textbox(
+                    value=initial_meeting_date,
+                    label="Meeting date (YYYY-MM-DD)",
+                )
                 marked_upload = gr.File(label="Upload marked transcript (.txt)", elem_classes=["compact-upload"])
                 marked_path_echo = gr.Textbox(label="Or use marked transcript from Tab 2 (path)", interactive=False)
                 load_btn = gr.Button("Load into editor")
@@ -1635,18 +1704,14 @@ def build_ui() -> gr.Blocks:
 
             # 4) Generate JSON
             with gr.Tab("4) Generate JSON"):
+                meeting_date_tab4 = gr.Textbox(
+                    value=initial_meeting_date,
+                    label="Meeting date (YYYY-MM-DD)",
+                )
                 marked_upload4 = gr.File(label="Upload edited marked transcript (.txt)", elem_classes=["compact-upload"])
                 marked_path_echo4 = gr.Textbox(label="Or use edited marked transcript from Tab 3 (path)", interactive=False)
 
-                # Keep this prominent (not tucked into Advanced options)
-                date_of_meeting = gr.DateTime(
-                    value=_today_iso(),
-                    include_time=False,
-                    type="string",
-                    label="Date of meeting",
-                )
-
-                with gr.Accordion("Advanced options", open=False):
+                with gr.Accordion("Advanced options", open=True):
                     provider = gr.Dropdown(
                         choices=["OpenAI", "Ollama Local"],
                         value="OpenAI",
@@ -1657,8 +1722,15 @@ def build_ui() -> gr.Blocks:
                         value="sqlite/fts5 Examples",
                         label="Few-shot source",
                     )
-                    model_override = gr.Textbox(value="gpt-5-mini", label="Model")
-                    debug_chunks = gr.Checkbox(value=False, label="Write debug chunks")
+                    transcript_model_override = gr.Textbox(
+                        value="gpt-5.4-nano",
+                        label="Model - Transcript to sentence",
+                    )
+                    minutes_model_override = gr.Textbox(
+                        value="gpt-5.4-mini",
+                        label="Model - Generate minutes",
+                    )
+                    debug_chunks = gr.Checkbox(value=True, label="Write debug chunks")
 
                 run_btn4 = gr.Button("Generate minutes JSON")
                 json_path = gr.Textbox(label="Minutes JSON path (saved)", interactive=False)
@@ -1667,6 +1739,10 @@ def build_ui() -> gr.Blocks:
 
             # 5) Merge DOCX
             with gr.Tab("5) Merge to Word"):
+                meeting_date_tab5 = gr.Textbox(
+                    value=initial_meeting_date,
+                    label="Meeting date (YYYY-MM-DD)",
+                )
                 minutes_json_upload = gr.File(label="Upload minutes JSON (.json)", elem_classes=["compact-upload"])
                 minutes_json_path_echo = gr.Textbox(label="Or use JSON from Tab 4 (path)", interactive=False)
 
@@ -1694,6 +1770,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1721,6 +1798,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1749,6 +1827,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1777,6 +1856,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1805,6 +1885,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1833,6 +1914,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1854,6 +1936,7 @@ def build_ui() -> gr.Blocks:
                     browser_source_transcript_path,
                     browser_source_docx_path,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                 ],
                 outputs=[
@@ -1870,6 +1953,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1898,6 +1982,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1926,6 +2011,7 @@ def build_ui() -> gr.Blocks:
                     browser_created_at,
                     browser_updated_at,
                     browser_transcript_text,
+                    browser_cleaned_transcript_text,
                     browser_minutes_text,
                     browser_view_btn,
                     browser_edit_btn,
@@ -1960,6 +2046,7 @@ def build_ui() -> gr.Blocks:
                     assigned_word_section,
                     assigned_word_heading,
                     transcript_preview,
+                    cleaned_transcript_preview,
                     minutes_preview,
                     apply_assignment_btn,
                     refresh_fewshot_btn,
@@ -1976,7 +2063,7 @@ def build_ui() -> gr.Blocks:
             review_section_key.change(
                 ui_preview_fewshot_row,
                 inputs=[st_fewshot_review, review_section_key],
-                outputs=[assigned_word_section, assigned_word_heading, transcript_preview, minutes_preview],
+                outputs=[assigned_word_section, assigned_word_heading, transcript_preview, cleaned_transcript_preview, minutes_preview],
             )
 
             apply_assignment_btn.click(
@@ -1991,6 +2078,7 @@ def build_ui() -> gr.Blocks:
                     assigned_word_section,
                     assigned_word_heading,
                     transcript_preview,
+                    cleaned_transcript_preview,
                     minutes_preview,
                 ],
             )
@@ -2007,6 +2095,7 @@ def build_ui() -> gr.Blocks:
                     assigned_word_section,
                     assigned_word_heading,
                     transcript_preview,
+                    cleaned_transcript_preview,
                     minutes_preview,
                 ],
             )
@@ -2033,10 +2122,41 @@ def build_ui() -> gr.Blocks:
                 ],
             )
 
+            for meeting_input in [
+                meeting_date_tab1,
+                meeting_date_tab2,
+                meeting_date_tab3,
+                meeting_date_tab4,
+                meeting_date_tab5,
+            ]:
+                meeting_input.change(
+                    ui_sync_meeting_date,
+                    inputs=[meeting_input],
+                    outputs=[
+                        st_meeting_date,
+                        meeting_date_tab1,
+                        meeting_date_tab2,
+                        meeting_date_tab3,
+                        meeting_date_tab4,
+                        meeting_date_tab5,
+                    ],
+                )
+
             run_btn.click(
                 ui_transcribe,
                 inputs=[audio, whisper_model, language],
                 outputs=[log, preview, out_path],
+            ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab1],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
             ).then(
                 _single_path_for_next_tab,
                 inputs=[out_path],
@@ -2048,6 +2168,17 @@ def build_ui() -> gr.Blocks:
                 inputs=[transcript_upload, transcript_path_echo],
                 outputs=[log2, marked_preview, marked_path],
             ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab2],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
+            ).then(
                 lambda p: (p or "", p or ""),
                 inputs=[marked_path],
                 outputs=[st_marked_path, marked_path_echo],
@@ -2057,6 +2188,17 @@ def build_ui() -> gr.Blocks:
                 ui_load_marked,
                 inputs=[marked_upload, marked_path_echo],
                 outputs=[status3, editor, marked_path_echo],
+            ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab3],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
             ).then(
                 lambda p: str(_derived_edited_marked_path(Path(p).expanduser().resolve()).name) if p else "",
                 inputs=[marked_path_echo],
@@ -2096,6 +2238,17 @@ def build_ui() -> gr.Blocks:
                 inputs=[editor, marked_path_echo],
                 outputs=[status3, saved_path],
             ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab3],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
+            ).then(
                 lambda p: (p or "", p or ""),
                 inputs=[saved_path],
                 outputs=[st_edited_marked_path, marked_path_echo4],
@@ -2103,15 +2256,39 @@ def build_ui() -> gr.Blocks:
 
             # When switching providers, set a sensible default model.
             provider.change(
-                lambda p: "gpt-4o-mini" if p == "OpenAI" else "gpt-oss:20b",
+                lambda p: (
+                    ("gpt-5.4-nano", "gpt-5.4-mini")
+                    if p == "OpenAI"
+                    else ("gpt-oss:20b", "gpt-oss:20b")
+                ),
                 inputs=[provider],
-                outputs=[model_override],
+                outputs=[transcript_model_override, minutes_model_override],
             )
 
             run_btn4.click(
                 ui_generate_json,
-                inputs=[marked_upload4, marked_path_echo4, date_of_meeting, provider, model_override, debug_chunks, fewshot_source],
+                inputs=[
+                    marked_upload4,
+                    marked_path_echo4,
+                    meeting_date_tab4,
+                    provider,
+                    transcript_model_override,
+                    minutes_model_override,
+                    debug_chunks,
+                    fewshot_source,
+                ],
                 outputs=[log4, json_preview, json_path],
+            ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab4],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
             ).then(
                 lambda p: (p or "", p or ""),
                 inputs=[json_path],
@@ -2122,6 +2299,17 @@ def build_ui() -> gr.Blocks:
                 ui_merge_docx,
                 inputs=[minutes_json_upload, minutes_json_path_echo, template_upload, use_default_template],
                 outputs=[log5, out_docx_path],
+            ).then(
+                ui_sync_meeting_date,
+                inputs=[meeting_date_tab5],
+                outputs=[
+                    st_meeting_date,
+                    meeting_date_tab1,
+                    meeting_date_tab2,
+                    meeting_date_tab3,
+                    meeting_date_tab4,
+                    meeting_date_tab5,
+                ],
             )
 
         gr.Markdown(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -7,6 +8,7 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 
+from .backfill_cleaned_fewshot import backfill_cleaned_transcripts
 from .chunking import identify_section_boundaries
 from .generation import generate_minutes_output
 from .marked_transcript import MarkedBoundary, parse_marked_transcript, render_marked_transcript
@@ -46,7 +48,21 @@ def generate(
         help="Meeting date to embed in the JSON output. If omitted, we try to infer from the input filename (YYYY-MM-DD).",
     ),
     provider: str = typer.Option("openai", "--provider", help="LLM provider (openai|ollama)"),
-    model: Optional[str] = typer.Option(None, "--model", help="Model name (provider-specific)"),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Legacy shared model name for both stages (provider-specific).",
+    ),
+    transcript_model: Optional[str] = typer.Option(
+        None,
+        "--transcript-model",
+        help="Model name for the transcript-to-sentence stage (provider-specific).",
+    ),
+    minutes_model: Optional[str] = typer.Option(
+        None,
+        "--minutes-model",
+        help="Model name for the minutes-generation stage (provider-specific).",
+    ),
     debug_chunks: bool = typer.Option(False, "--debug-chunks", help="Write section chunks next to output for inspection"),
     minutes_style: str = typer.Option(
         "bullets",
@@ -100,7 +116,8 @@ def generate(
             output_path=output,
             date_of_meeting=date_of_meeting,
             provider=provider,
-            model=model,
+            transcript_model=transcript_model or model,
+            minutes_model=minutes_model or model,
             debug_chunks=debug_chunks,
             minutes_style=minutes_style,
             fewshot_source=fewshot_source_norm,
@@ -175,6 +192,37 @@ def merge_docx(
         output_docx_path=output_docx,
     )
     console.print_json(data=summary)
+
+
+@app.command(name="backfill-cleaned-fewshot")
+def backfill_cleaned_fewshot(
+    provider: str = typer.Option("openai", "--provider", help="LLM provider (openai|ollama)"),
+    model: Optional[str] = typer.Option(None, "--model", help="Model name (provider-specific)"),
+    db_path: Optional[Path] = typer.Option(None, "--db-path", dir_okay=False, help="Few-shot SQLite path"),
+    limit: Optional[int] = typer.Option(None, "--limit", min=1, help="Process at most this many rows"),
+    overwrite_existing: bool = typer.Option(
+        False,
+        "--overwrite-existing",
+        help="Rebuild cleaned transcript text even for rows that already have it.",
+    ),
+):
+    """Backfill cleaned transcript text for SQLite few-shot examples."""
+
+    result = backfill_cleaned_transcripts(
+        provider=provider,
+        model=model,
+        path=db_path,
+        only_missing=not overwrite_existing,
+        limit=limit,
+        log_callback=console.print,
+    )
+
+    console.print(
+        f"Backfill complete for [bold]{result.db_path}[/bold] using model [bold]{result.model_name}[/bold]."
+    )
+    console.print(
+        f"Scanned={result.scanned} Updated={result.updated} Skipped={result.skipped} Failed={result.failed}"
+    )
 
 
 @app.command(name="suggest-cues")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,24 +15,50 @@ from .fewshot_db import retrieve_examples as retrieve_fewshot_db_examples
 from .sections import SECTION_DEFS, SECTION_HEADINGS
 
 
+_PROMPTS_CACHE: Optional[dict[str, str]] = None
+_PROMPT_SECTION_RE = re.compile(r"^##\s+`([^`]+)`\s*$", flags=re.MULTILINE)
+
+
+def _read_prompts_text() -> str:
+    override = os.environ.get("GEN_KOC_MM_PROMPTS_PATH", "").strip()
+    if override:
+        return Path(override).read_text(encoding="utf-8")
+    return _load_text_from_package("prompts.md")
+
+
+def _parse_prompt_sections(raw_text: str) -> dict[str, str]:
+    matches = list(_PROMPT_SECTION_RE.finditer(raw_text))
+    prompts: dict[str, str] = {}
+
+    for idx, match in enumerate(matches):
+        name = match.group(1).strip()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(raw_text)
+        body = raw_text[start:end].strip()
+        lines = body.splitlines()
+        if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+            body = "\n".join(lines[1:-1]).strip()
+        prompts[name] = body
+
+    return prompts
+
+
+def _get_prompt_template(name: str) -> str:
+    global _PROMPTS_CACHE
+    if _PROMPTS_CACHE is None:
+        _PROMPTS_CACHE = _parse_prompt_sections(_read_prompts_text())
+    prompt = _PROMPTS_CACHE.get(name, "").strip()
+    if not prompt:
+        raise ValueError(f"Prompt template {name!r} was not found in prompts.md")
+    return prompt
+
+
+def transcript_2_sentence_system_prompt() -> str:
+    return _get_prompt_template("transcript_2_sentence_system_prompt")
+
+
 def minutes_system_prompt() -> str:
-    system_prompt = """
-            You are an AI Assistant that performs extractive summarization for a single meeting section.
-
-            Requirements:
-            1. Perform extractive summarization only. Keep the output tightly grounded in the transcript.
-            2. Do not add facts, decisions, names, dates, amounts, or actions that are not supported by the transcript.
-            3. Do not format the output as Markdown, bullets, headings, or sections.
-            4. Output plain text only.
-            5. Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
-            6. Do not refer to unnamed speakers as Speaker 1, Speaker 2, or similar labels.
-            7. Only mention a person when the transcript explicitly identifies them by name or role and that identification is relevant.
-            8. If a statement is important but the speaker is unnamed, summarize the statement without speaker attribution.
-            9. Do NOT include any timestamps anywhere.
-            10. If there is no substantive content for this section, output nothing (empty string).
-        """
-
-    return system_prompt
+    return transcript_2_sentence_system_prompt()
 
 
 @dataclass(frozen=True)
@@ -39,6 +66,7 @@ class FewShotExample:
     title: str
     section_key: str  # canonical key from section_headings.json, or "*" for global
     transcript: str
+    cleaned_transcript: str
     expected_bullets: str
 
 
@@ -206,7 +234,15 @@ def load_fewshot_config() -> FewShotConfig:
             if not expected.endswith("\n"):
                 expected += "\n"
 
-            out.append(FewShotExample(title=title, section_key=sk_norm, transcript=transcript, expected_bullets=expected))
+            out.append(
+                FewShotExample(
+                    title=title,
+                    section_key=sk_norm,
+                    transcript=transcript,
+                    cleaned_transcript="",
+                    expected_bullets=expected,
+                )
+            )
             continue
 
         # v1 (legacy): map section_heading -> section_key by matching heading text.
@@ -224,7 +260,15 @@ def load_fewshot_config() -> FewShotConfig:
 
         if not exp.endswith("\n"):
             exp += "\n"
-        out.append(FewShotExample(title=title, section_key=key, transcript=tr, expected_bullets=exp))
+        out.append(
+            FewShotExample(
+                title=title,
+                section_key=key,
+                transcript=tr,
+                cleaned_transcript="",
+                expected_bullets=exp,
+            )
+        )
 
     return FewShotConfig(examples=out)
 
@@ -270,7 +314,8 @@ def _load_fewshot_from_db() -> FewShotConfig:
         FewShotExample(
             title=f"{ex.section_key} ({ex.meeting_date or 'undated'})",
             section_key=ex.section_key,
-            transcript=ex.transcript_text,
+            transcript=ex.transcript_text.strip(),
+            cleaned_transcript=(ex.cleaned_transcript_text or "").strip(),
             expected_bullets=(ex.minutes_text.rstrip() + "\n"),
         )
         for ex in db_examples
@@ -279,21 +324,53 @@ def _load_fewshot_from_db() -> FewShotConfig:
     return FewShotConfig(examples=out)
 
 
-def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key: str) -> str:
+def _pick_matching_fewshot_examples(*, examples: list[FewShotExample], target_section_key: str) -> list[FewShotExample]:
+    return [ex for ex in examples if ex.section_key == "*" or ex.section_key == target_section_key]
+
+
+def _render_first_stage_fewshot_block(*, examples: list[FewShotExample], target_section_key: str) -> str:
     if not examples:
         return ""
 
-    # Include global (*) examples and ones matching target key.
-    picked = [ex for ex in examples if ex.section_key == "*" or ex.section_key == target_section_key]
+    picked = [
+        ex
+        for ex in _pick_matching_fewshot_examples(examples=examples, target_section_key=target_section_key)
+        if ex.transcript.strip() and ex.cleaned_transcript.strip()
+    ]
     if not picked:
         return ""
 
-    blocks: list[str] = ["Few-shot examples (transcript -> final section minutes):"]
+    blocks: list[str] = ["Few-shot examples (raw transcript -> cleaned transcript):"]
     for i, ex in enumerate(picked, start=1):
         blocks.append(f"Example {i}: {ex.title}")
         blocks.append(f"Applies to section_key: {ex.section_key}")
-        blocks.append("Transcript:")
+        blocks.append("Raw transcript:")
         blocks.append(ex.transcript)
+        blocks.append("Cleaned transcript:")
+        blocks.append(ex.cleaned_transcript)
+        blocks.append("")
+
+    return "\n".join(blocks).rstrip() + "\n\n"
+
+
+def _render_second_stage_fewshot_block(*, examples: list[FewShotExample], target_section_key: str) -> str:
+    if not examples:
+        return ""
+
+    picked = [
+        ex
+        for ex in _pick_matching_fewshot_examples(examples=examples, target_section_key=target_section_key)
+        if (ex.cleaned_transcript or ex.transcript).strip() and ex.expected_bullets.strip()
+    ]
+    if not picked:
+        return ""
+
+    blocks: list[str] = ["Few-shot examples (cleaned transcript -> final section minutes):"]
+    for i, ex in enumerate(picked, start=1):
+        blocks.append(f"Example {i}: {ex.title}")
+        blocks.append(f"Applies to section_key: {ex.section_key}")
+        blocks.append("Cleaned transcript:")
+        blocks.append((ex.cleaned_transcript or ex.transcript).strip())
         blocks.append("Expected output:")
         blocks.append(ex.expected_bullets.rstrip("\n"))
         blocks.append("")
@@ -301,17 +378,24 @@ def _render_fewshot_block(*, examples: list[FewShotExample], target_section_key:
     return "\n".join(blocks).rstrip() + "\n\n"
 
 
-def _retrieved_db_fewshot_examples(*, target_section_key: str, section_transcript: str) -> list[FewShotExample]:
+def _retrieved_db_fewshot_examples(
+    *,
+    target_section_key: str,
+    section_transcript: str,
+    current_meeting_date: str = "",
+) -> list[FewShotExample]:
     retrieved = retrieve_fewshot_db_examples(
         section_key=target_section_key,
         query_text=section_transcript,
         limit=2,
+        exclude_meeting_date=current_meeting_date,
     )
     return [
         FewShotExample(
             title=f"{ex.section_key} ({ex.meeting_date or 'undated'})",
             section_key=ex.section_key,
-            transcript=ex.transcript_text,
+            transcript=ex.transcript_text.strip(),
+            cleaned_transcript=(ex.cleaned_transcript_text or "").strip(),
             expected_bullets=(ex.minutes_text.rstrip() + "\n"),
         )
         for ex in retrieved
@@ -319,7 +403,12 @@ def _retrieved_db_fewshot_examples(*, target_section_key: str, section_transcrip
     ]
 
 
-def _select_fewshot_examples(*, target_section_key: str, section_transcript: str) -> tuple[list[FewShotExample], str]:
+def _select_fewshot_examples(
+    *,
+    target_section_key: str,
+    section_transcript: str,
+    current_meeting_date: str = "",
+) -> tuple[list[FewShotExample], str]:
     fewshot_examples: list[FewShotExample] = []
     source_label = "packaged JSON"
     source_mode = _fewshot_source_mode()
@@ -328,14 +417,19 @@ def _select_fewshot_examples(*, target_section_key: str, section_transcript: str
         fewshot_examples = _retrieved_db_fewshot_examples(
             target_section_key=target_section_key,
             section_transcript=section_transcript,
+            current_meeting_date=current_meeting_date,
         )
         source_label = "SQLite/FTS5"
-    elif target_section_key and source_mode == "auto" and count_fewshot_db_examples() > 0:
+        return fewshot_examples, source_label
+
+    if target_section_key and source_mode == "auto" and count_fewshot_db_examples() > 0:
         fewshot_examples = _retrieved_db_fewshot_examples(
             target_section_key=target_section_key,
             section_transcript=section_transcript,
+            current_meeting_date=current_meeting_date,
         )
         source_label = "SQLite/FTS5"
+        return fewshot_examples, source_label
 
     if not fewshot_examples:
         fewshot = _get_fewshot_config()
@@ -345,29 +439,21 @@ def _select_fewshot_examples(*, target_section_key: str, section_transcript: str
     return fewshot_examples, source_label
 
 
+def minutes_generate_system_prompt() -> str:
+    return _get_prompt_template("minutes_generate_system_prompt")
+
+
 def format_minutes_system_prompt() -> str:
-    system_prompt = """
-            You are an AI Assistant that formats an extractive section summary into final meeting minutes in Markdown.
-
-            Requirements:
-            1. Preserve all information from the input summary. Do not add new facts and do not omit supported details.
-            2. Format the output as Markdown.
-            3. When the context changes to a new sub-topic, group related items into nested bullet lists.
-            4. Each top-level bullet line must start with '- '. Nested bullets may be used for grouped sub-sections.
-            5. Keep bullet nesting to at most 2 levels deep.
-            6. Maintain the original meaning, order, specificity, terminology, and numbers from the input summary.
-            7. Do not use labels like Speaker 1, Speaker 2, or similar speaker placeholders in the final minutes.
-            8. Only mention a person when the input explicitly identifies them by name or role and that identification is relevant.
-            9. Otherwise, write the minutes without speaker attribution.
-            10. Do NOT include any timestamps anywhere.
-            11. Do NOT add any header block.
-            12. Output MUST be only Markdown bullet lists, with nested bullets when helpful.
-            13. If the input is empty or has no substantive content, output nothing (empty string).
-        """
-    return system_prompt
+    return minutes_generate_system_prompt()
 
 
-def format_minutes_user_prompt(*, section_heading: str, summary_text: str, section_transcript: str = "") -> str:
+def minutes_generate_user_prompt(
+    *,
+    section_heading: str,
+    summary_text: str,
+    section_transcript: str = "",
+    current_meeting_date: str = "",
+) -> str:
     summary_text = (summary_text or "").strip()
     heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
     target_key = heading_to_key.get(_norm_key(section_heading), "")
@@ -375,74 +461,83 @@ def format_minutes_user_prompt(*, section_heading: str, summary_text: str, secti
     fewshot_examples, source_label = _select_fewshot_examples(
         target_section_key=target_key,
         section_transcript=section_transcript,
+        current_meeting_date=current_meeting_date,
     )
-    fewshot_block = _render_fewshot_block(examples=fewshot_examples, target_section_key=target_key)
+    fewshot_block = _render_second_stage_fewshot_block(
+        examples=fewshot_examples,
+        target_section_key=target_key,
+    )
 
     examples_block = ""
     if fewshot_block.strip():
         examples_block = f"""
         Here are a few reference examples from the {source_label} few-shot source.
 
-        These examples show the target final minutes style for this section.
+        These examples show how a cleaned transcript for this section is converted into the target final minutes style.
         Use them to match structure, grouping, specificity, and level of detail.
-        Do not copy wording from them unless the same facts are explicitly supported by the input summary.
+        Do not copy wording from them unless the same facts are explicitly supported by the input cleaned transcript.
 
         {fewshot_block}
         """
 
-    user_prompt = f"""
-        You are formatting the final minutes for the section '{section_heading}'.
-
-        Task:
-        1. Convert the input summary into final Markdown bullet-list minutes.
-        2. Group related items into nested bullet sub-sections when the context clearly changes.
-
-        Constraints:
-        - Preserve all supported information from the input.
-        - Do not add new facts, decisions, names, dates, amounts, or action items.
-        - Output only Markdown bullet lists.
-        - Use nested bullets only when they help group related content under a clear context change.
-        - Do not use labels like Speaker 1, Speaker 2, or similar speaker placeholders in the final minutes.
-        - Only mention a person when the input explicitly identifies them and that identification is relevant.
-        - Otherwise, write the minutes without speaker attribution.
-        - If the input is empty, output an empty string.
-
-        {examples_block}
-        Input summary:
-        {summary_text}
-        """.strip()
-
-    return user_prompt
+    return _get_prompt_template("minutes_generate_user_prompt").format(
+        examples_block=examples_block,
+        summary_text=summary_text,
+    )
 
 
-def minutes_user_prompt(*, section_heading: str, section_transcript: str) -> str:
-    """Prompt for a single section.
+def format_minutes_user_prompt(
+    *,
+    section_heading: str,
+    summary_text: str,
+    section_transcript: str = "",
+    current_meeting_date: str = "",
+) -> str:
+    return minutes_generate_user_prompt(
+        section_heading=section_heading,
+        summary_text=summary_text,
+        section_transcript=section_transcript,
+        current_meeting_date=current_meeting_date,
+    )
 
-    This stage intentionally does not include few-shot examples. Final minutes
-    examples are injected in the formatting stage instead.
-    """
 
-    user_prompt = f"""
-        You are generating an extractive summary for the meeting section: '{section_heading}'.
+def transcript_2_sentence_user_prompt(
+    *,
+    section_heading: str,
+    section_transcript: str,
+    current_meeting_date: str = "",
+) -> str:
+    heading_to_key = {_norm_key(s.heading): s.key for s in SECTION_DEFS}
+    target_key = heading_to_key.get(_norm_key(section_heading), "")
 
-        Task:
-        1. Perform extractive summarization of this section only.
-        2. Capture the substantive information in plain text without applying final formatting.
+    fewshot_examples, source_label = _select_fewshot_examples(
+        target_section_key=target_key,
+        section_transcript=section_transcript,
+        current_meeting_date=current_meeting_date,
+    )
+    fewshot_block = _render_first_stage_fewshot_block(
+        examples=fewshot_examples,
+        target_section_key=target_key,
+    )
 
-        Constraints:
-        - Keep the output tightly grounded in the transcript.
-        - Do not add new facts, decisions, names, dates, amounts, or action items that are not supported by the transcript.
-        - Do not format the output as Markdown, bullets, headings, or sections.
-        - Output plain text only.
-        - Preserve important details, terminology, numbers, and action items that are explicitly supported by the transcript.
-        - Do not refer to unnamed speakers as Speaker 1, Speaker 2, or similar labels.
-        - Only mention a person when the transcript explicitly identifies them by name or role and that identification is relevant.
-        - If a statement is important but the speaker is unnamed, summarize the statement without speaker attribution.
-        - Do NOT include any timestamps anywhere.
-        - If there is no substantive content in this section, output an empty string.
+    prompt = _get_prompt_template("transcript_2_sentence_user_prompt").format(
+        section_transcript=section_transcript,
+    )
+    if not fewshot_block.strip():
+        return prompt
 
-        Transcript for this section:
-        {section_transcript}
-        """.strip()
+    return (
+        f"{prompt}\n\n"
+        f"Here are a few reference examples from the {source_label} few-shot source.\n\n"
+        "These examples show how to transform a raw transcript section into a cleaned transcript section "
+        "without dropping substantive facts.\n\n"
+        f"{fewshot_block}"
+    )
 
-    return user_prompt
+
+def minutes_user_prompt(*, section_heading: str, section_transcript: str, current_meeting_date: str = "") -> str:
+    return transcript_2_sentence_user_prompt(
+        section_heading=section_heading,
+        section_transcript=section_transcript,
+        current_meeting_date=current_meeting_date,
+    )

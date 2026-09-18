@@ -11,14 +11,15 @@ from typing import Callable, Optional
 from dotenv import load_dotenv
 
 from .chunking import section_is_absent
+from .fewshot_db import FewshotExampleRow, save_examples
 from .llm import format_minutes_bullets, generate_minutes, load_llm_config
 from .marked_transcript import parse_marked_transcript
 from .prompting import (
-    format_minutes_system_prompt,
-    format_minutes_user_prompt,
     get_fewshot_source_label,
-    minutes_system_prompt,
-    minutes_user_prompt,
+    minutes_generate_system_prompt,
+    minutes_generate_user_prompt,
+    transcript_2_sentence_system_prompt,
+    transcript_2_sentence_user_prompt,
     validate_fewshot_config,
 )
 from .sections import SECTION_DEFS, SECTION_HEADINGS
@@ -32,11 +33,14 @@ LogCallback = Callable[[str], None]
 class GenerateOutputResult:
     output_path: Path
     payload: dict
-    model_name: str
+    transcript_model_name: str
+    minutes_model_name: str
     fewshot_total: int
     fewshot_global: int
     fewshot_specific: int
     fewshot_source_label: str
+    db_rows_saved: int = 0
+    db_rows_updated: int = 0
 
 
 def _safe_slug(s: str) -> str:
@@ -64,7 +68,8 @@ def generate_minutes_output(
     output_path: Path,
     date_of_meeting: Optional[str],
     provider: str,
-    model: Optional[str],
+    transcript_model: Optional[str],
+    minutes_model: Optional[str],
     debug_chunks: bool,
     minutes_style: str = "bullets",
     fewshot_source: str = "sqlite",
@@ -97,12 +102,15 @@ def generate_minutes_output(
                 f"({fewshot_global} global, {fewshot_specific} section-specific)"
             )
 
+    date_str = infer_date_of_meeting(input_path=input_path, explicit=date_of_meeting)
     chunks = parse_marked_transcript(raw)
     total_bytes = max(sum(len(ch.text.encode("utf-8")) for ch in chunks), 1)
     processed_bytes = 0
 
-    llm_cfg = load_llm_config(provider=provider, model=model)
-    model_name = llm_cfg.model
+    transcript_llm_cfg = load_llm_config(provider=provider, model=transcript_model)
+    minutes_llm_cfg = load_llm_config(provider=provider, model=minutes_model)
+    transcript_model_name = transcript_llm_cfg.model
+    minutes_model_name = minutes_llm_cfg.model
 
     heading_to_key = {s.heading: s.key for s in SECTION_DEFS}
 
@@ -110,9 +118,10 @@ def generate_minutes_output(
     if minutes_style_norm != "bullets":
         raise ValueError("--minutes-style currently supports only: bullets")
 
-    sys_p = minutes_system_prompt()
-    format_sys_p = format_minutes_system_prompt()
+    sys_p = transcript_2_sentence_system_prompt()
+    format_sys_p = minutes_generate_system_prompt()
     section_to_text: dict[str, str] = {h: "" for h in SECTION_HEADINGS}
+    fewshot_rows: list[FewshotExampleRow] = []
 
     if debug_chunks:
         chunk_dir = output_path.parent / (output_path.stem + "_chunks")
@@ -144,7 +153,11 @@ def generate_minutes_output(
                 )
             continue
 
-        user_p = minutes_user_prompt(section_heading=ch.heading, section_transcript=ch.text)
+        user_p = transcript_2_sentence_user_prompt(
+            section_heading=ch.heading,
+            section_transcript=ch.text,
+            current_meeting_date=date_str,
+        )
 
         slug = _safe_slug(ch.heading)
         base = f"{run_id}_{idx:02d}_{slug}"
@@ -156,7 +169,7 @@ def generate_minutes_output(
             system_prompt=sys_p,
             user_prompt=user_p,
             provider=provider,
-            model=model_name,
+            model=transcript_model_name,
         )
 
         (logs_dir / f"{base}.summary.response.txt").write_text(bullets_raw + "\n", encoding="utf-8")
@@ -173,10 +186,11 @@ def generate_minutes_output(
                 )
             continue
 
-        format_user_p = format_minutes_user_prompt(
+        format_user_p = minutes_generate_user_prompt(
             section_heading=ch.heading,
             summary_text=summary_text,
             section_transcript=ch.text,
+            current_meeting_date=date_str,
         )
 
         (logs_dir / f"{base}.formatting.system.txt").write_text(format_sys_p + "\n", encoding="utf-8")
@@ -186,7 +200,7 @@ def generate_minutes_output(
             system_prompt=format_sys_p,
             user_prompt=format_user_p,
             provider=provider,
-            model=model_name,
+            model=minutes_model_name,
         )
 
         (logs_dir / f"{base}.formatting.response.txt").write_text(formatted_raw + "\n", encoding="utf-8")
@@ -194,6 +208,18 @@ def generate_minutes_output(
 
         bullets = "\n".join([ln for ln in formatted_text.splitlines() if ln.strip().startswith("-")]).strip()
         section_to_text[ch.heading] = bullets
+        if summary_text and bullets:
+            fewshot_rows.append(
+                FewshotExampleRow(
+                    source_transcript_path=str(input_path),
+                    source_docx_path=str(output_path),
+                    section_key=heading_to_key.get(ch.heading, ch.heading.lower()),
+                    transcript_text=ch.text.strip(),
+                    cleaned_transcript_text=summary_text,
+                    minutes_text=bullets,
+                    meeting_date="",
+                )
+            )
 
         processed_bytes += chunk_bytes
         if progress_callback is not None:
@@ -203,7 +229,29 @@ def generate_minutes_output(
                 f"{idx}/{len(chunks)} {ch.heading}",
             )
 
-    date_str = infer_date_of_meeting(input_path=input_path, explicit=date_of_meeting)
+    db_rows_saved = 0
+    db_rows_updated = 0
+
+    if fewshot_rows:
+        normalized_rows = [
+            FewshotExampleRow(
+                source_transcript_path=row.source_transcript_path,
+                source_docx_path=row.source_docx_path,
+                section_key=row.section_key,
+                transcript_text=row.transcript_text,
+                cleaned_transcript_text=row.cleaned_transcript_text,
+                minutes_text=row.minutes_text,
+                meeting_date=date_str,
+            )
+            for row in fewshot_rows
+        ]
+        db_result = save_examples(normalized_rows, overwrite=True)
+        db_rows_saved = db_result["inserted"]
+        db_rows_updated = db_result["updated"]
+        if log_callback is not None:
+            log_callback(
+                f"Updated SQLite few-shot examples: inserted={db_rows_saved}, updated={db_rows_updated}"
+            )
 
     section_status: dict[str, str] = {}
     for ch in chunks:
@@ -220,7 +268,8 @@ def generate_minutes_output(
             "name": "gen_koc_mm",
             "version": "0.1.0",
             "provider": provider,
-            "model": model_name,
+            "transcript_model": transcript_model_name,
+            "minutes_model": minutes_model_name,
         },
         "source": {
             "input_file": input_path.name,
@@ -248,9 +297,12 @@ def generate_minutes_output(
     return GenerateOutputResult(
         output_path=output_path,
         payload=payload,
-        model_name=model_name,
+        transcript_model_name=transcript_model_name,
+        minutes_model_name=minutes_model_name,
         fewshot_total=fewshot_total,
         fewshot_global=fewshot_global,
         fewshot_specific=fewshot_specific,
         fewshot_source_label=fewshot_source_label,
+        db_rows_saved=db_rows_saved,
+        db_rows_updated=db_rows_updated,
     )

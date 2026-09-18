@@ -17,6 +17,7 @@ class FewshotExampleRow:
     section_key: str
     transcript_text: str
     minutes_text: str
+    cleaned_transcript_text: str = ""
     meeting_date: str = ""
 
 
@@ -24,6 +25,7 @@ class FewshotExampleRow:
 class RetrievedFewshotExample:
     section_key: str
     transcript_text: str
+    cleaned_transcript_text: str
     minutes_text: str
     source_transcript_path: str
     source_docx_path: str
@@ -41,6 +43,7 @@ class FewshotExampleRecord:
     source_docx_path: str
     section_key: str
     transcript_text: str
+    cleaned_transcript_text: str
     minutes_text: str
     meeting_date: str
     created_at: str
@@ -103,6 +106,7 @@ def ensure_db(path: Path | None = None) -> Path:
                 source_docx_path TEXT NOT NULL,
                 section_key TEXT NOT NULL,
                 transcript_text TEXT NOT NULL,
+                cleaned_transcript_text TEXT NOT NULL DEFAULT '',
                 minutes_text TEXT NOT NULL,
                 meeting_date TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -111,6 +115,23 @@ def ensure_db(path: Path | None = None) -> Path:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(fewshot_examples)").fetchall()}
+        if "cleaned_transcript_text" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE fewshot_examples
+                ADD COLUMN cleaned_transcript_text TEXT NOT NULL DEFAULT ''
+                """
+            )
         try:
             conn.execute(
                 """
@@ -152,6 +173,47 @@ def ensure_db(path: Path | None = None) -> Path:
     return db_path
 
 
+def get_app_setting(key: str, *, default: str = "", path: Path | None = None) -> str:
+    ensure_db(path)
+    with connect_db(path) as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            ((key or "").strip(),),
+        ).fetchone()
+        if not row:
+            return default
+        return str(row["value"] or "")
+
+
+def set_app_setting(key: str, value: str, *, path: Path | None = None) -> str:
+    ensure_db(path)
+    now = _utc_now()
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("setting key cannot be empty")
+
+    with connect_db(path) as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value or "", now),
+        )
+    return value or ""
+
+
+def get_last_meeting_date(*, path: Path | None = None) -> str:
+    return get_app_setting("last_meeting_date", default="", path=path)
+
+
+def set_last_meeting_date(meeting_date: str, *, path: Path | None = None) -> str:
+    return set_app_setting("last_meeting_date", meeting_date or "", path=path)
+
+
 def count_examples(path: Path | None = None) -> int:
     db_path = (path or default_db_path()).resolve()
     if not db_path.exists():
@@ -176,6 +238,7 @@ def load_all_examples(path: Path | None = None) -> list[RetrievedFewshotExample]
                 id,
                 section_key,
                 transcript_text,
+                cleaned_transcript_text,
                 minutes_text,
                 source_transcript_path,
                 source_docx_path,
@@ -191,6 +254,7 @@ def load_all_examples(path: Path | None = None) -> list[RetrievedFewshotExample]
                 id=row["id"],
                 section_key=row["section_key"],
                 transcript_text=row["transcript_text"],
+                cleaned_transcript_text=row["cleaned_transcript_text"],
                 minutes_text=row["minutes_text"],
                 source_transcript_path=row["source_transcript_path"],
                 source_docx_path=row["source_docx_path"],
@@ -217,6 +281,7 @@ def list_examples(path: Path | None = None) -> list[FewshotExampleRecord]:
                 source_docx_path,
                 section_key,
                 transcript_text,
+                cleaned_transcript_text,
                 minutes_text,
                 meeting_date,
                 created_at,
@@ -239,6 +304,7 @@ def get_example(example_id: int, path: Path | None = None) -> FewshotExampleReco
                 source_docx_path,
                 section_key,
                 transcript_text,
+                cleaned_transcript_text,
                 minutes_text,
                 meeting_date,
                 created_at,
@@ -259,6 +325,7 @@ def update_example(
     section_key: str,
     transcript_text: str,
     minutes_text: str,
+    cleaned_transcript_text: str | None = None,
     meeting_date: str = "",
     path: Path | None = None,
 ) -> FewshotExampleRecord:
@@ -269,6 +336,7 @@ def update_example(
     section_key = (section_key or "").strip()
     transcript_text = (transcript_text or "").strip()
     minutes_text = (minutes_text or "").strip()
+    cleaned_transcript_text = "" if cleaned_transcript_text is None else cleaned_transcript_text.strip()
     meeting_date = (meeting_date or "").strip()
 
     if not source_transcript_path:
@@ -292,6 +360,7 @@ def update_example(
                     source_docx_path = ?,
                     section_key = ?,
                     transcript_text = ?,
+                    cleaned_transcript_text = ?,
                     minutes_text = ?,
                     meeting_date = ?,
                     updated_at = ?
@@ -302,6 +371,7 @@ def update_example(
                     source_docx_path,
                     section_key,
                     transcript_text,
+                    cleaned_transcript_text,
                     minutes_text,
                     meeting_date,
                     now,
@@ -364,6 +434,7 @@ def retrieve_examples(
     section_key: str,
     query_text: str,
     limit: int = 2,
+    exclude_meeting_date: str = "",
     path: Path | None = None,
 ) -> list[RetrievedFewshotExample]:
     db_path = (path or default_db_path()).resolve()
@@ -372,15 +443,16 @@ def retrieve_examples(
 
     ensure_db(db_path)
     match_query = _build_match_query(query_text)
+    exclude_meeting_date = (exclude_meeting_date or "").strip()
 
     with connect_db(db_path) as conn:
         rows = []
         if match_query:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT
                     e.section_key,
                     e.transcript_text,
+                    e.cleaned_transcript_text,
                     e.minutes_text,
                     e.source_transcript_path,
                     e.source_docx_path,
@@ -390,19 +462,25 @@ def retrieve_examples(
                 JOIN fewshot_examples AS e
                   ON e.id = fewshot_examples_fts.rowid
                 WHERE e.section_key = ?
+            """
+            args: list[str | int] = [section_key]
+            if exclude_meeting_date:
+                sql += " AND COALESCE(TRIM(e.meeting_date), '') <> ?"
+                args.append(exclude_meeting_date)
+            sql += """
                   AND fewshot_examples_fts MATCH ?
                 ORDER BY score ASC, e.updated_at DESC, e.id DESC
                 LIMIT ?
-                """,
-                (section_key, match_query, limit),
-            ).fetchall()
+                """
+            args.extend([match_query, limit])
+            rows = conn.execute(sql, args).fetchall()
 
         if not rows:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT
                     section_key,
                     transcript_text,
+                    cleaned_transcript_text,
                     minutes_text,
                     source_transcript_path,
                     source_docx_path,
@@ -410,16 +488,23 @@ def retrieve_examples(
                     NULL AS score
                 FROM fewshot_examples
                 WHERE section_key = ?
+            """
+            args = [section_key]
+            if exclude_meeting_date:
+                sql += " AND COALESCE(TRIM(meeting_date), '') <> ?"
+                args.append(exclude_meeting_date)
+            sql += """
                 ORDER BY updated_at DESC, id DESC
                 LIMIT ?
-                """,
-                (section_key, limit),
-            ).fetchall()
+                """
+            args.append(limit)
+            rows = conn.execute(sql, args).fetchall()
 
     return [
         RetrievedFewshotExample(
             section_key=row["section_key"],
             transcript_text=row["transcript_text"],
+            cleaned_transcript_text=row["cleaned_transcript_text"],
             minutes_text=row["minutes_text"],
             source_transcript_path=row["source_transcript_path"],
             source_docx_path=row["source_docx_path"],
@@ -497,6 +582,7 @@ def save_examples(
                     UPDATE fewshot_examples
                     SET source_docx_path = ?,
                         transcript_text = ?,
+                        cleaned_transcript_text = ?,
                         minutes_text = ?,
                         meeting_date = ?,
                         updated_at = ?
@@ -505,6 +591,7 @@ def save_examples(
                     (
                         row.source_docx_path,
                         row.transcript_text,
+                        row.cleaned_transcript_text.strip(),
                         row.minutes_text,
                         row.meeting_date,
                         now,
@@ -521,18 +608,20 @@ def save_examples(
                     source_docx_path,
                     section_key,
                     transcript_text,
+                    cleaned_transcript_text,
                     minutes_text,
                     meeting_date,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row.source_transcript_path,
                     row.source_docx_path,
                     row.section_key,
                     row.transcript_text,
+                    row.cleaned_transcript_text.strip(),
                     row.minutes_text,
                     row.meeting_date,
                     now,
@@ -542,3 +631,63 @@ def save_examples(
             inserted += 1
 
     return {"inserted": inserted, "updated": updated}
+
+
+def list_examples_needing_cleaned_transcript(path: Path | None = None) -> list[FewshotExampleRecord]:
+    db_path = (path or default_db_path()).resolve()
+    if not db_path.exists():
+        return []
+
+    ensure_db(db_path)
+    with connect_db(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                source_transcript_path,
+                source_docx_path,
+                section_key,
+                transcript_text,
+                cleaned_transcript_text,
+                minutes_text,
+                meeting_date,
+                created_at,
+                updated_at
+            FROM fewshot_examples
+            WHERE TRIM(COALESCE(cleaned_transcript_text, '')) = ''
+            ORDER BY updated_at DESC, id DESC
+            """
+        ).fetchall()
+        return [FewshotExampleRecord(**dict(row)) for row in rows]
+
+
+def set_cleaned_transcript_text(
+    *,
+    example_id: int,
+    cleaned_transcript_text: str,
+    path: Path | None = None,
+) -> FewshotExampleRecord:
+    ensure_db(path)
+
+    cleaned_transcript_text = (cleaned_transcript_text or "").strip()
+    if not cleaned_transcript_text:
+        raise ValueError("cleaned_transcript_text cannot be empty")
+
+    now = _utc_now()
+    with connect_db(path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE fewshot_examples
+            SET cleaned_transcript_text = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (cleaned_transcript_text, now, example_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"Example id={example_id} was not found.")
+
+    record = get_example(example_id, path=path)
+    if record is None:
+        raise ValueError(f"Example id={example_id} was not found after update.")
+    return record
